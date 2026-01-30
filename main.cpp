@@ -1,0 +1,1365 @@
+#define WIN32_LEAN_AND_MEAN
+
+#include <Windows.h>
+
+HINSTANCE hInst;
+HWND hwnd;
+
+bool shouldClose = false; 
+LRESULT CALLBACK winproc(HWND hwnd, UINT wm, WPARAM wp, LPARAM lp);
+int CreateDX12Window(int requestedDimensionX, int requestDimensionY);
+int PollDX12WindowEvents();
+
+#include <d3d12.h>
+#include <dxgi1_6.h>
+#include <d3dcompiler.h>
+#include <DirectXMath.h>
+#include "d3dx12.h"
+using namespace DirectX;
+
+constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 3;
+bool g_UseWarp = false;
+bool g_IsInitialized = false;
+
+ID3D12Device2* deviceHandle;
+
+ID3D12CommandQueue* queueHandle;
+IDXGISwapChain4* swapChain;
+
+ID3D12Resource* swapChainImages[MAX_FRAMES_IN_FLIGHT];
+
+ID3D12Resource* swapChainDepthImages[MAX_FRAMES_IN_FLIGHT];
+
+ID3D12GraphicsCommandList* graphicCommandBuffer;
+
+ID3D12CommandAllocator* graphicCommandPools[MAX_FRAMES_IN_FLIGHT];
+
+ID3D12DescriptorHeap* globalRTVDescriptorHeap;
+ID3D12DescriptorHeap* globalDSVDescriptorHeap;
+
+
+UINT globalRTVDescriptorSize;
+UINT globalDSVDescriptorSize;
+UINT currentFrame;
+
+
+ID3D12Fence* g_Fence;
+
+uint64_t g_FenceValue = 0;
+
+
+uint64_t g_FrameFenceValues[MAX_FRAMES_IN_FLIGHT] = {};
+
+
+HANDLE g_FenceEvent = INVALID_HANDLE_VALUE;
+
+bool g_VSync = true;
+
+
+bool g_TearingSupported = false;
+
+enum ShaderType
+{
+    VERTEX = 0,
+    PIXEL = 1
+};
+
+struct ShaderHandles
+{
+    ShaderType type;
+    ID3DBlob* shader;
+};
+
+ShaderHandles shaderHandles[2];
+
+ID3D12Resource* globalBufferResource;
+
+ID3D12CommandQueue* CreateCommandQueue(ID3D12Device2* device, D3D12_COMMAND_LIST_TYPE type);
+ID3D12Device2* CreateDevice(IDXGIAdapter4* adapter, bool debug);
+bool CheckTearingSupport();
+void EnableRuntimeValidation();
+IDXGIAdapter4* GetAdapter(UINT createFactoryFlags);
+IDXGISwapChain4* CreateSwapChain(HWND hWnd, ID3D12CommandQueue* commandQueue, int width, int height, int bufferCount, UINT debug);
+int Render();
+void Flush(ID3D12CommandQueue* commandQueue, ID3D12Fence* fence, uint64_t& fenceValue, HANDLE fenceEvent);
+void WaitForFenceValue(ID3D12Fence* fence, uint64_t fenceValue, HANDLE fenceEvent, DWORD duration);
+uint64_t Signal(ID3D12CommandQueue* commandQueue, ID3D12Fence* fence, uint64_t& fenceValue);
+ID3D12Fence* CreateFence(ID3D12Device2* device);
+HANDLE CreateEventHandle();
+ID3D12GraphicsCommandList* CreateCommandList(ID3D12Device2* device,
+    ID3D12CommandAllocator* commandAllocator, D3D12_COMMAND_LIST_TYPE type);
+ID3D12CommandAllocator* CreateCommandAllocator(ID3D12Device2* device, D3D12_COMMAND_LIST_TYPE type);
+int CreateRenderTargetView(ID3D12Device2* device, IDXGISwapChain4* swapChain, ID3D12DescriptorHeap* descriptorHeap, ID3D12Resource** outBuffers, UINT rtvDescriptorSize);
+ID3D12DescriptorHeap* CreateDescriptorHeap(ID3D12Device2* device, D3D12_DESCRIPTOR_HEAP_TYPE type, int numDescriptors, D3D12_DESCRIPTOR_HEAP_FLAGS flags, UINT* descriptorSize);
+void ReleaseD3D12Resources();
+int CreateDepthStencilView(ID3D12Device2* device, ID3D12DescriptorHeap* descriptorHeap, ID3D12Resource** outBuffers, UINT dsvDescriptorSize);
+ID3DBlob* CreateShaderBlob(const char* shaderfile);
+ID3D12Resource* CreateHostBuffer(ID3D12Device2* device, UINT size, D3D12_RESOURCE_FLAGS flags);
+void WriteToHostMemory(ID3D12Resource* bufferHandle, void* data, size_t size, size_t offset, int copies, size_t stride);
+void CreateSRVDescriptorHandle(ID3D12Device2* device, ID3D12Resource* bufferHandle, UINT offset, ID3D12DescriptorHeap* heap, UINT numCount, UINT size, DXGI_FORMAT format, UINT srvDescriptorSize, UINT descriptorHandleOffset);
+void CreateUAVDescriptorHandle(ID3D12Device2* device, ID3D12Resource* bufferHandle, UINT offset, ID3D12DescriptorHeap* heap, UINT numCount, UINT size, DXGI_FORMAT format, UINT srvDescriptorSize, UINT descriptorHandleOffset);
+void CreateCBVDescriptorHandle(ID3D12Device2* device, ID3D12Resource* bufferHandle, UINT offset, ID3D12DescriptorHeap* heap, UINT size, UINT srvDescriptorSize, UINT descriptorHandleOffset);
+struct Camera
+{
+    XMMATRIX proj;
+    XMMATRIX view;
+};
+
+XMMATRIX world[2];
+
+Camera cam;
+
+
+struct PipelineObject
+{
+    ID3D12RootSignature* rootSignature;
+    ID3D12PipelineState* pipelineState;
+    ID3D12DescriptorHeap* descriptorHeap;
+    int descriptorHeapPointer;
+    int descriptorHeapCount;
+    D3D_PRIMITIVE_TOPOLOGY topology;//D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST
+    int vertexCount;
+    int instanceCount;
+};
+
+
+PipelineObject triangles[2];
+
+ID3D12PipelineState* CreatePipelineStateObject(ID3D12Device2* device, ID3D12RootSignature* _rootSignature, ShaderHandles* handles, int count);
+ID3D12RootSignature* CreateRootSignature(ID3D12Device2* device, CD3DX12_ROOT_PARAMETER* rootParameters, UINT parameterCount);
+ID3D12RootSignature* CreateGenericRootSignature();
+
+
+struct HostBuffer
+{
+    ID3D12Resource* bufferHandle;
+    size_t sizeOfAlloc;
+    size_t currentPointer;
+};
+
+
+struct DescriptorHeap
+{
+    ID3D12DescriptorHeap* descriptorHeap;
+    int descriptorHeapHandlePointer;
+    int maxDescriptorHeapHandles;
+    UINT descriptorHeapHandleSize;
+};
+
+DescriptorHeap mainSRVDescriptorHeap;
+
+void CreateDescriptorHeapManager(DescriptorHeap* heap, UINT maxDescriptorHandles, D3D12_DESCRIPTOR_HEAP_TYPE type, D3D12_DESCRIPTOR_HEAP_FLAGS flags);
+int CreateSRVSetRepeat(ID3D12Resource* bufferHandle, UINT byteOffset, UINT sizePerFrame, UINT strideSize, DXGI_FORMAT format, UINT numDescriptors, DescriptorHeap* heap, UINT cbvOffset);
+
+
+
+int main()
+{
+    cam.view = XMMatrixLookAtRH(XMVectorSet(0.0f, 0.0f, 10.0f, 0.0f), XMVectorSet(0.0f, 0.0f, 0.0f, 0.0f), XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f));
+    constexpr float fov = XMConvertToRadians(60.0f);
+    float aspect = 800.0f / 600.0f;
+    float nearZ = 0.1f;
+    float farZ = 1000.0f;
+
+    cam.proj = XMMatrixPerspectiveFovRH(fov, aspect, nearZ, farZ);
+
+    if (CreateDX12Window(800, 600) < 0)
+        return -1;
+
+    EnableRuntimeValidation();
+
+    IDXGIAdapter4* adapter = GetAdapter(DXGI_CREATE_FACTORY_DEBUG);
+    if (!adapter)
+        goto end;
+
+    deviceHandle = CreateDevice(adapter, true);
+    if (!deviceHandle)
+        goto end;
+
+    queueHandle = CreateCommandQueue(deviceHandle, D3D12_COMMAND_LIST_TYPE_DIRECT);
+    if (!queueHandle)
+        goto end;
+
+    swapChain = CreateSwapChain(
+        hwnd,
+        queueHandle,
+        800,
+        600,
+        MAX_FRAMES_IN_FLIGHT,
+        0
+    );
+    if (!swapChain)
+        goto end;
+
+    globalRTVDescriptorHeap = CreateDescriptorHeap(
+        deviceHandle,
+        D3D12_DESCRIPTOR_HEAP_TYPE_RTV,
+        MAX_FRAMES_IN_FLIGHT,
+        D3D12_DESCRIPTOR_HEAP_FLAG_NONE, &globalRTVDescriptorSize
+    );
+    if (!globalRTVDescriptorHeap)
+        goto end;
+
+    globalDSVDescriptorHeap = CreateDescriptorHeap(
+        deviceHandle,
+        D3D12_DESCRIPTOR_HEAP_TYPE_DSV,
+        MAX_FRAMES_IN_FLIGHT,
+        D3D12_DESCRIPTOR_HEAP_FLAG_NONE, &globalDSVDescriptorSize
+    );
+
+    if (!globalDSVDescriptorHeap)
+        goto end;
+
+
+    CreateDescriptorHeapManager(&mainSRVDescriptorHeap, MAX_FRAMES_IN_FLIGHT * 100, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE);
+
+    if (CreateRenderTargetView(
+        deviceHandle,
+        swapChain,
+        globalRTVDescriptorHeap,
+        swapChainImages, globalRTVDescriptorSize) < 0)
+    {
+        goto end;
+    }
+
+    if (CreateDepthStencilView(
+        deviceHandle,
+        globalDSVDescriptorHeap,
+        swapChainDepthImages, globalDSVDescriptorSize) < 0)
+    {
+        goto end;
+    }
+
+    for (UINT i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+    {
+        graphicCommandPools[i] =
+            CreateCommandAllocator(deviceHandle, D3D12_COMMAND_LIST_TYPE_DIRECT);
+
+        if (!graphicCommandPools[i])
+            goto end;
+    }
+
+    graphicCommandBuffer = CreateCommandList(
+        deviceHandle,
+        graphicCommandPools[0],
+        D3D12_COMMAND_LIST_TYPE_DIRECT
+    );
+    if (!graphicCommandBuffer)
+        goto end;
+
+    g_Fence = CreateFence(deviceHandle);
+    if (!g_Fence)
+        goto end;
+
+    g_FenceEvent = CreateEventHandle();
+    if (g_FenceEvent == INVALID_HANDLE_VALUE)
+        goto end;
+
+    world[0] = XMMatrixIdentity();
+    world[1] = XMMatrixTranslation(2.0, 2.0, 0.0);
+
+    shaderHandles[0] = { VERTEX, CreateShaderBlob("VS.bin") };
+    shaderHandles[1] = { PIXEL, CreateShaderBlob("PS.bin") };
+
+    triangles[0].rootSignature = CreateGenericRootSignature();
+
+    triangles[0].pipelineState = CreatePipelineStateObject(deviceHandle, triangles[0].rootSignature, shaderHandles, 2);
+
+    globalBufferResource = CreateHostBuffer(deviceHandle, 4096, D3D12_RESOURCE_FLAG_NONE);
+
+    WriteToHostMemory(globalBufferResource, world, 64, 0, 3, 256);
+
+    WriteToHostMemory(globalBufferResource, &cam, sizeof(Camera), 3*256, MAX_FRAMES_IN_FLIGHT, sizeof(Camera));
+    
+    triangles[0].descriptorHeapPointer = CreateSRVSetRepeat(globalBufferResource, 3*256, sizeof(Camera), 128, DXGI_FORMAT_UNKNOWN, MAX_FRAMES_IN_FLIGHT, &mainSRVDescriptorHeap, 0);
+
+    triangles[0].topology = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+    triangles[0].instanceCount = 1;
+    triangles[0].vertexCount = 3;
+    triangles[0].descriptorHeap = mainSRVDescriptorHeap.descriptorHeap;
+    triangles[0].descriptorHeapCount = 2;
+    triangles[0].descriptorHeapPointer = 0;
+
+    triangles[1].topology = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+    triangles[1].instanceCount = 1;
+    triangles[1].vertexCount = 3;
+    triangles[1].descriptorHeap = mainSRVDescriptorHeap.descriptorHeap;
+    triangles[1].descriptorHeapCount = 2;
+    triangles[1].descriptorHeapPointer = 0;
+    triangles[1].pipelineState = triangles[0].pipelineState;
+    triangles[1].rootSignature = triangles[0].rootSignature;
+
+    WriteToHostMemory(globalBufferResource, &world[1], 64, 1280, 3, 256);
+
+    triangles[1].descriptorHeapPointer = CreateSRVSetRepeat(globalBufferResource, 3 * 256, sizeof(Camera), 128, DXGI_FORMAT_UNKNOWN, MAX_FRAMES_IN_FLIGHT, &mainSRVDescriptorHeap, 1280);
+
+    g_IsInitialized = true;
+
+
+    while (!shouldClose)
+    {
+        PollDX12WindowEvents();
+        int ret = Render();
+        if (ret < 0) break;
+    }
+
+    Flush(queueHandle, g_Fence, g_FenceValue, g_FenceEvent);
+
+end:
+    ReleaseD3D12Resources();
+
+    if (adapter)
+    {
+        adapter->Release();
+        adapter = nullptr;
+    }
+
+    CloseWindow(hwnd);
+    return 0;
+}
+
+ID3DBlob* CreateShaderBlob(const char* shaderfile)
+{
+    ID3DBlob* shaderBlob;
+
+    WCHAR str[250]; 
+    mbstowcs(str, shaderfile, 250);
+
+    HRESULT result = D3DReadFileToBlob(str, &shaderBlob);
+
+    if (FAILED(result))
+    {
+        return NULL;
+    }
+
+    return shaderBlob;
+    
+}
+
+ID3D12PipelineState* CreatePipelineStateObject(ID3D12Device2* device, ID3D12RootSignature* _rootSignature, ShaderHandles* handles, int count)
+{
+    ID3D12PipelineState* pipelineState;
+
+    HRESULT hr;
+
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC desc{};
+    desc.pRootSignature = _rootSignature;
+
+
+    for (int i = 0; i < count; i++)
+    {
+        SIZE_T bcLen = shaderHandles[i].shader->GetBufferSize();
+        void* shaderData = shaderHandles[i].shader->GetBufferPointer();
+        switch (handles[i].type)
+        {
+        case VERTEX:
+            desc.VS.BytecodeLength = bcLen;
+            desc.VS.pShaderBytecode = shaderData;
+            break;
+        case PIXEL:
+            desc.PS.BytecodeLength = bcLen;
+            desc.PS.pShaderBytecode = shaderData;
+            break;
+        }
+    }
+
+    desc.InputLayout = { nullptr, 0 };
+    desc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
+    desc.SampleMask = UINT_MAX;
+    desc.DepthStencilState = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
+    desc.DepthStencilState.DepthEnable = TRUE;
+    desc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+    desc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+    desc.DepthStencilState.StencilEnable = FALSE;
+    desc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
+    desc.NumRenderTargets = 1;
+    desc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+    desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    desc.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
+    desc.SampleDesc.Count = 1;
+    desc.SampleDesc.Quality = 0;
+
+    hr = device->CreateGraphicsPipelineState(
+        &desc,
+        IID_PPV_ARGS(&pipelineState)
+    );
+
+    if (FAILED(hr))
+    {
+        printf("Failed to create PSO\n");
+    }
+
+    return pipelineState;
+}
+
+void ReleaseD3D12Resources()
+{
+
+    if (triangles[0].rootSignature)
+        triangles[0].rootSignature->Release();
+
+    if (triangles[0].pipelineState)
+        triangles[0].pipelineState->Release();
+
+    if (globalBufferResource)
+        globalBufferResource->Release();
+
+    for (int i = 0; i < 2; i++)
+    {
+        if (shaderHandles[i].shader)
+        {
+            shaderHandles[i].shader->Release();
+        }
+    }
+     
+    // --- Ensure GPU is not using resources (recommended) ---
+    if (g_Fence && queueHandle)
+    {
+        g_FenceValue++;
+        queueHandle->Signal(g_Fence, g_FenceValue);
+
+        if (g_Fence->GetCompletedValue() < g_FenceValue)
+        {
+            g_Fence->SetEventOnCompletion(g_FenceValue, g_FenceEvent);
+            WaitForSingleObject(g_FenceEvent, INFINITE);
+        }
+    }
+
+    // --- Swapchain back buffers ---
+    for (UINT i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+    {
+        if (swapChainImages[i])
+        {
+            swapChainImages[i]->Release();
+            swapChainImages[i] = nullptr;
+        }
+
+        if (swapChainDepthImages[i])
+        {
+            swapChainDepthImages[i]->Release();
+            swapChainDepthImages[i] = nullptr;
+        }
+    }
+
+    // --- Command allocators ---
+    for (UINT i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+    {
+        if (graphicCommandPools[i])
+        {
+            graphicCommandPools[i]->Release();
+            graphicCommandPools[i] = nullptr;
+        }
+    }
+
+    // --- Command list ---
+    if (graphicCommandBuffer)
+    {
+        graphicCommandBuffer->Release();
+        graphicCommandBuffer = nullptr;
+    }
+
+    // --- Descriptor heap ---
+    if (globalRTVDescriptorHeap)
+    {
+        globalRTVDescriptorHeap->Release();
+        globalRTVDescriptorHeap = nullptr;
+    }
+
+    if (mainSRVDescriptorHeap.descriptorHeap)
+    {
+        mainSRVDescriptorHeap.descriptorHeap->Release();
+        mainSRVDescriptorHeap.descriptorHeap = nullptr;
+    }
+    if (globalDSVDescriptorHeap)
+    {
+        globalDSVDescriptorHeap->Release();
+        globalDSVDescriptorHeap = nullptr;
+    }
+
+    // --- Fence ---
+    if (g_Fence)
+    {
+        g_Fence->Release();
+        g_Fence = nullptr;
+    }
+
+    // --- Fence event ---
+    if (g_FenceEvent != INVALID_HANDLE_VALUE)
+    {
+        CloseHandle(g_FenceEvent);
+        g_FenceEvent = INVALID_HANDLE_VALUE;
+    }
+
+    // --- Swapchain ---
+    if (swapChain)
+    {
+        swapChain->Release();
+        swapChain = nullptr;
+    }
+
+    // --- Command queue ---
+    if (queueHandle)
+    {
+        queueHandle->Release();
+        queueHandle = nullptr;
+    }
+
+    // --- Device (last) ---
+    if (deviceHandle)
+    {
+        deviceHandle->Release();
+        deviceHandle = nullptr;
+    }
+}
+
+
+ID3D12Device2* CreateDevice(IDXGIAdapter4* adapter, bool debug)
+{
+    ID3D12Device2* d3d12Device2;
+
+    if (FAILED(D3D12CreateDevice(adapter, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&d3d12Device2))))
+    {
+        printf("Failed to create device with given adapter\n");
+        return NULL;
+    }
+    if (debug)
+    {
+        ID3D12InfoQueue* infoQueue;
+        if (SUCCEEDED((d3d12Device2->QueryInterface(IID_PPV_ARGS(&infoQueue)))))
+        {
+            infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_CORRUPTION, TRUE);
+            infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_ERROR, TRUE);
+            infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_WARNING, TRUE);
+
+            D3D12_MESSAGE_SEVERITY Severities[] =
+            {
+                D3D12_MESSAGE_SEVERITY_INFO
+            };
+
+            D3D12_MESSAGE_ID DenyIds[1] = {
+                /*
+
+            D3D12_MESSAGE_ID_CLEARRENDERTARGETVIEW_MISMATCHINGCLEARVALUE,  
+
+
+            D3D12_MESSAGE_ID_MAP_INVALID_NULLRANGE,                         
+
+
+            D3D12_MESSAGE_ID_UNMAP_INVALID_NULLRANGE,                      
+            */
+
+            };
+
+            D3D12_INFO_QUEUE_FILTER NewFilter = {};
+
+            NewFilter.DenyList.NumSeverities = _countof(Severities);
+
+
+            NewFilter.DenyList.pSeverityList = Severities;
+
+
+            NewFilter.DenyList.NumIDs = 0;
+
+
+            NewFilter.DenyList.pIDList = DenyIds;
+
+            if (FAILED(infoQueue->PushStorageFilter(&NewFilter))) {
+                printf("Cannot set debug levels when requested");
+            }
+
+            infoQueue->Release();
+        }
+    }
+    
+
+    return d3d12Device2;
+}
+
+
+ID3D12CommandQueue* CreateCommandQueue(ID3D12Device2* device, D3D12_COMMAND_LIST_TYPE type)
+{
+    ID3D12CommandQueue* d3d12CommandQueue = NULL;
+
+    D3D12_COMMAND_QUEUE_DESC desc = {};
+
+
+    desc.Type = type;
+
+
+    desc.Priority = D3D12_COMMAND_QUEUE_PRIORITY_NORMAL;
+
+
+    desc.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
+
+
+    desc.NodeMask = 0;
+
+    if (FAILED(device->CreateCommandQueue(&desc, IID_PPV_ARGS(&d3d12CommandQueue))))
+    {
+        printf("Cannot create command queue\n");
+    }
+
+    return d3d12CommandQueue;
+}
+
+
+
+bool CheckTearingSupport()
+{
+    BOOL allowTearing = FALSE;
+
+    IDXGIFactory4* dxgiFactory4;
+
+    if (SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(&dxgiFactory4))))
+    {
+        IDXGIFactory5* dxgiFactory5;
+        if (SUCCEEDED(dxgiFactory4->QueryInterface(IID_PPV_ARGS(&dxgiFactory5))))
+        {
+            if (FAILED(dxgiFactory5->CheckFeatureSupport(
+                DXGI_FEATURE_PRESENT_ALLOW_TEARING,
+                &allowTearing, sizeof(allowTearing))))
+            {
+                allowTearing = FALSE;
+            }
+
+            dxgiFactory5->Release();
+        }
+
+        dxgiFactory4->Release();
+    }
+
+
+    return allowTearing == TRUE;
+}
+
+
+void EnableRuntimeValidation()
+{
+    ID3D12Debug* debugInterface;
+
+    if (FAILED(D3D12GetDebugInterface(IID_PPV_ARGS(&debugInterface))))
+    {
+        printf("Debugging enabled failed");
+        return;
+    }
+
+    debugInterface->EnableDebugLayer();
+
+    ID3D12Debug1* debug1 = nullptr;
+    if (SUCCEEDED(debugInterface->QueryInterface(IID_PPV_ARGS(&debug1))))
+    {
+        debug1->SetEnableGPUBasedValidation(TRUE);
+        debug1->Release();
+    }
+
+    debugInterface->Release();
+}
+
+IDXGIAdapter4* GetAdapter(UINT createFactoryFlags)
+{
+    IDXGIFactory4* dxgiFactory;
+
+    createFactoryFlags = DXGI_CREATE_FACTORY_DEBUG;
+
+    if (FAILED(CreateDXGIFactory2(createFactoryFlags, IID_PPV_ARGS(&dxgiFactory)))) 
+    {
+        printf("Could not find compatible adapter\n");
+        return NULL;
+    }
+
+    IDXGIAdapter1* dxgiAdapter1 = NULL;
+
+    IDXGIAdapter4* dxgiAdapter4 = NULL;
+
+    SIZE_T maxDedicatedVideoMemory = 0;
+
+
+    for (UINT i = 0; dxgiFactory->EnumAdapters1(i, &dxgiAdapter1) != DXGI_ERROR_NOT_FOUND; ++i)
+
+
+    {
+        DXGI_ADAPTER_DESC1 dxgiAdapterDesc1;
+
+
+        dxgiAdapter1->GetDesc1(&dxgiAdapterDesc1);
+
+
+
+        if ((dxgiAdapterDesc1.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) == 0 &&
+
+
+            SUCCEEDED(D3D12CreateDevice(dxgiAdapter1, D3D_FEATURE_LEVEL_11_0, __uuidof(ID3D12Device), nullptr)) &&
+            dxgiAdapterDesc1.DedicatedVideoMemory > maxDedicatedVideoMemory)
+        {
+            maxDedicatedVideoMemory = dxgiAdapterDesc1.DedicatedVideoMemory;
+
+            if (FAILED(dxgiAdapter1->QueryInterface(IID_PPV_ARGS(&dxgiAdapter4))))
+            {
+                printf("Cannot convert to adapter 4 %d\n", i);
+            }
+        }
+
+
+    }
+
+    dxgiFactory->Release();
+
+    if (dxgiAdapter1)
+    {
+        dxgiAdapter1->Release();
+    }
+
+    return dxgiAdapter4;
+
+
+
+}
+
+IDXGISwapChain4* CreateSwapChain(HWND hWnd, ID3D12CommandQueue* commandQueue, int width, int height, int bufferCount, UINT debug)
+{
+  
+    IDXGIFactory4* dxgiFactory4;
+
+    UINT createFactoryFlags = debug;
+
+    if (FAILED(CreateDXGIFactory2(createFactoryFlags, IID_PPV_ARGS(&dxgiFactory4))))
+    {
+        printf("Failed to create factory for creating swap chain\n");
+        return NULL;
+    }
+
+    DXGI_SWAP_CHAIN_DESC1 swapChainDesc = {};
+
+
+    swapChainDesc.Width = width;
+
+
+    swapChainDesc.Height = height;
+
+
+    swapChainDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+
+
+    swapChainDesc.Stereo = FALSE;
+
+
+    swapChainDesc.SampleDesc = { 1, 0 };
+
+
+    swapChainDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+
+
+    swapChainDesc.BufferCount = bufferCount;
+
+
+    swapChainDesc.Scaling = DXGI_SCALING_STRETCH;
+
+
+    swapChainDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+
+
+    swapChainDesc.AlphaMode = DXGI_ALPHA_MODE_UNSPECIFIED;
+
+    swapChainDesc.Flags = CheckTearingSupport() ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0;
+
+    IDXGISwapChain1* swapChain1 = NULL;
+
+    IDXGISwapChain4* swapChain4 = NULL;
+    
+    HRESULT hr;
+    if (FAILED(hr = dxgiFactory4->CreateSwapChainForHwnd(commandQueue, hwnd, &swapChainDesc, NULL, NULL, &swapChain1)))
+    {
+        
+        printf("Cannot create swapchain\n");
+        dxgiFactory4->Release();
+        return NULL;
+    }
+
+    dxgiFactory4->MakeWindowAssociation(hWnd, DXGI_MWA_NO_ALT_ENTER);
+
+    if (FAILED(swapChain1->QueryInterface(IID_PPV_ARGS(&swapChain4))))
+    {
+        printf("Cannot conver to type 4 swapchain");
+    }
+
+    swapChain1->Release();
+    dxgiFactory4->Release();
+    return swapChain4;
+}
+
+ID3D12DescriptorHeap* CreateDescriptorHeap(ID3D12Device2* device, D3D12_DESCRIPTOR_HEAP_TYPE type, int numDescriptors, D3D12_DESCRIPTOR_HEAP_FLAGS flags, UINT* descriptorSize)
+{
+    *descriptorSize = device->GetDescriptorHandleIncrementSize(type);
+
+    ID3D12DescriptorHeap* descriptorHeap = NULL;
+
+    D3D12_DESCRIPTOR_HEAP_DESC desc = {};
+
+    desc.NumDescriptors = numDescriptors;
+
+    desc.Type = type;
+
+    desc.Flags = flags;
+
+    if (FAILED(device->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&descriptorHeap))))
+    {
+        printf("Cannot create descriptor heap\n");
+    }
+
+    return descriptorHeap;
+
+}
+
+int CreateRenderTargetView(ID3D12Device2* device, IDXGISwapChain4* swapChain, ID3D12DescriptorHeap* descriptorHeap, ID3D12Resource** outBuffers, UINT rtvDescriptorSize)
+{
+    CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(descriptorHeap->GetCPUDescriptorHandleForHeapStart());
+
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+    {
+        ID3D12Resource* backBuffer;
+
+        if (FAILED(swapChain->GetBuffer(i, IID_PPV_ARGS(&backBuffer))))
+        {
+            printf("Failed to get back buffer handle from swapchain\n");
+            return -1;
+        }
+
+        device->CreateRenderTargetView(backBuffer, NULL, rtvHandle);
+
+        rtvHandle.Offset(rtvDescriptorSize);
+
+        outBuffers[i] = backBuffer;
+    }
+
+    return 0;
+}
+
+int CreateDepthStencilView(ID3D12Device2* device, ID3D12DescriptorHeap* descriptorHeap, ID3D12Resource** outBuffers, UINT dsvDescriptorSize)
+{
+    CD3DX12_CPU_DESCRIPTOR_HANDLE dsvHandle(descriptorHeap->GetCPUDescriptorHandleForHeapStart());
+
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+    {
+        ID3D12Resource* depthBuffer = nullptr;
+
+        D3D12_RESOURCE_DESC depthStencilDesc = {};
+        depthStencilDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        depthStencilDesc.Width = 800;
+        depthStencilDesc.Height = 600;
+        depthStencilDesc.Format = DXGI_FORMAT_D32_FLOAT;
+        depthStencilDesc.SampleDesc.Count = 1;
+        depthStencilDesc.SampleDesc.Quality = 0;
+        depthStencilDesc.MipLevels = 1;
+        depthStencilDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
+        depthStencilDesc.DepthOrArraySize = 1;
+        depthStencilDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+
+        D3D12_CLEAR_VALUE clearValue = {};
+        clearValue.Format = DXGI_FORMAT_D32_FLOAT;
+        clearValue.DepthStencil.Depth = 1.0f;
+        clearValue.DepthStencil.Stencil = 0;
+
+        CD3DX12_HEAP_PROPERTIES props = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
+
+        if (FAILED(device->CreateCommittedResource(&props, D3D12_HEAP_FLAG_NONE, &depthStencilDesc, D3D12_RESOURCE_STATE_DEPTH_WRITE, &clearValue, IID_PPV_ARGS(&depthBuffer))))
+        {
+            printf("Failed to create depth stencil resource\n");
+            return -1;
+        }
+
+        D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc{};
+
+        dsvDesc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+        dsvDesc.Format = DXGI_FORMAT_D32_FLOAT;
+        dsvDesc.Flags = D3D12_DSV_FLAG_NONE;
+        dsvDesc.Texture2D.MipSlice = 0;
+
+        device->CreateDepthStencilView(depthBuffer, &dsvDesc, dsvHandle);
+
+        dsvHandle.Offset(dsvDescriptorSize);
+
+        outBuffers[i] = depthBuffer;
+    }
+
+    return 0;
+}
+
+
+ID3D12CommandAllocator* CreateCommandAllocator(ID3D12Device2* device, D3D12_COMMAND_LIST_TYPE type)
+{
+    ID3D12CommandAllocator* commandAllocator = NULL;
+
+    if (FAILED(device->CreateCommandAllocator(type, IID_PPV_ARGS(&commandAllocator))))
+    {
+        printf("Failed to create command pool\n");
+    }
+
+    return commandAllocator;
+}
+
+
+
+ID3D12GraphicsCommandList* CreateCommandList(ID3D12Device2* device,
+    ID3D12CommandAllocator* commandAllocator, D3D12_COMMAND_LIST_TYPE type)
+
+{
+    ID3D12GraphicsCommandList* commandList = NULL;
+
+    if (FAILED(device->CreateCommandList(0, type, commandAllocator, nullptr, IID_PPV_ARGS(&commandList))))
+    {
+        printf("Failed to create command list\n");
+        return NULL;
+    }
+
+    if (FAILED(commandList->Close()))
+    {
+        printf("Failed to close the command list\n");
+        commandList->Release();
+        return NULL;
+    }
+
+    return commandList;
+}
+
+
+
+ID3D12Fence* CreateFence(ID3D12Device2* device)
+{
+    ID3D12Fence* fence = NULL;
+    if (FAILED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence))))
+    {
+        printf("Failed to create a fence\n");
+    }
+
+    return fence;
+
+}
+
+HANDLE CreateEventHandle()
+{
+    HANDLE fenceEvent;
+    fenceEvent = ::CreateEvent(NULL, FALSE, FALSE, NULL);
+    if (fenceEvent == INVALID_HANDLE_VALUE)
+        printf("Failed to create fence event.\n");
+
+    return fenceEvent;
+}
+
+uint64_t Signal(ID3D12CommandQueue* commandQueue, ID3D12Fence* fence, uint64_t& fenceValue)
+{
+    uint64_t fenceValueForSignal = ++fenceValue;
+    if (FAILED(commandQueue->Signal(fence, fenceValueForSignal)))
+    {
+        printf("Could not signal fence\n");
+        return ~0ui64;
+    }
+    return fenceValueForSignal;
+
+}
+
+void WaitForFenceValue(ID3D12Fence* fence, uint64_t fenceValue, HANDLE fenceEvent, DWORD duration)
+{
+    if (fence->GetCompletedValue() < fenceValue)
+    {
+        if (SUCCEEDED(fence->SetEventOnCompletion(fenceValue, fenceEvent)))
+        {
+            WaitForSingleObject(fenceEvent, duration);
+        }
+    }
+}
+
+void Flush(ID3D12CommandQueue* commandQueue, ID3D12Fence* fence, uint64_t& fenceValue, HANDLE fenceEvent)
+
+{
+    uint64_t fenceValueForSignal = Signal(commandQueue, fence, fenceValue);
+
+
+    WaitForFenceValue(fence, fenceValueForSignal, fenceEvent, UINT32_MAX);
+}
+
+int Render()
+{
+    static int depthBufferExchange = 0;
+
+    auto commandAllocator = graphicCommandPools[currentFrame];
+
+    auto backBuffer = swapChainImages[currentFrame];
+
+    auto depthBuffer = swapChainDepthImages[currentFrame];
+
+    commandAllocator->Reset();
+
+    graphicCommandBuffer->Reset(commandAllocator, nullptr);
+
+    CD3DX12_CPU_DESCRIPTOR_HANDLE dsvHandle(globalDSVDescriptorHeap->GetCPUDescriptorHandleForHeapStart(), currentFrame, globalDSVDescriptorSize);
+
+    CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(globalRTVDescriptorHeap->GetCPUDescriptorHandleForHeapStart(), currentFrame, globalRTVDescriptorSize);
+
+    
+    {
+        CD3DX12_RESOURCE_BARRIER barrier = CD3DX12_RESOURCE_BARRIER::Transition(backBuffer, D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
+
+        graphicCommandBuffer->ResourceBarrier(1, &barrier);
+
+        const FLOAT clearColor[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+
+        graphicCommandBuffer->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
+    }
+
+    {
+        graphicCommandBuffer->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH, 1.0, 0, 0, nullptr);
+    }
+
+
+    D3D12_VIEWPORT viewport{};
+    viewport.Width = 800.0f;
+    viewport.Height = 600.0f;
+    viewport.MinDepth = 0.0f;
+    viewport.MaxDepth = 1.0f;
+
+    D3D12_RECT scissor{};
+    scissor.right = 800;
+    scissor.bottom = 600;
+
+    graphicCommandBuffer->RSSetViewports(1, &viewport);
+    graphicCommandBuffer->RSSetScissorRects(1, &scissor);
+
+    graphicCommandBuffer->OMSetRenderTargets(1, &rtvHandle, FALSE, &dsvHandle);
+
+
+    for(int i = 0; i<2; i++)
+    {
+        CD3DX12_GPU_DESCRIPTOR_HANDLE handle = CD3DX12_GPU_DESCRIPTOR_HANDLE(triangles[i].descriptorHeap->GetGPUDescriptorHandleForHeapStart(), triangles[i].descriptorHeapPointer + (currentFrame * triangles[i].descriptorHeapCount), mainSRVDescriptorHeap.descriptorHeapHandleSize);
+
+        graphicCommandBuffer->SetGraphicsRootSignature(triangles[i].rootSignature);
+
+        graphicCommandBuffer->SetDescriptorHeaps(1, &triangles[i].descriptorHeap);
+        graphicCommandBuffer->SetGraphicsRootDescriptorTable(0, handle);
+
+        graphicCommandBuffer->SetPipelineState(triangles[i].pipelineState);
+        graphicCommandBuffer->IASetPrimitiveTopology(triangles[i].topology);
+
+        
+        //graphicCommandBuffer->SetGraphicsRoot32BitConstants(0, 32, &cam, 0);
+        graphicCommandBuffer->DrawInstanced(triangles[i].vertexCount, triangles[i].instanceCount, 0, 0);
+    }
+
+
+
+    {
+        CD3DX12_RESOURCE_BARRIER barrier = CD3DX12_RESOURCE_BARRIER::Transition(
+
+
+            backBuffer,
+
+
+            D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
+
+
+        graphicCommandBuffer->ResourceBarrier(1, &barrier);
+    }
+
+    if (FAILED(graphicCommandBuffer->Close()))
+    {
+        printf("Cannot finish recording command buffer\n");
+        return -1;
+    }
+
+    ID3D12CommandList* const commandLists[] = {
+        graphicCommandBuffer
+    };
+
+    queueHandle->ExecuteCommandLists(_countof(commandLists), commandLists);
+
+    UINT syncInterval = g_VSync ? 1 : 0;
+
+
+    UINT presentFlags = g_TearingSupported && !g_VSync ? DXGI_PRESENT_ALLOW_TEARING : 0;
+
+
+    if (FAILED(swapChain->Present(syncInterval, presentFlags)))
+    {
+        printf("Cannot present image\n");
+        return -1;
+    }
+
+    g_FrameFenceValues[currentFrame] = Signal(queueHandle, g_Fence, g_FenceValue);
+
+    currentFrame = swapChain->GetCurrentBackBufferIndex();
+
+    WaitForFenceValue(g_Fence, g_FrameFenceValues[currentFrame], g_FenceEvent, UINT32_MAX);
+
+    return 0;
+}
+
+
+ID3D12Resource* CreateHostBuffer(ID3D12Device2* device, UINT size, D3D12_RESOURCE_FLAGS flags)
+{
+    D3D12_RESOURCE_DESC bufferDesc = {};
+    bufferDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    bufferDesc.Alignment = 0;
+    bufferDesc.Width = size;
+    bufferDesc.Height = 1;
+    bufferDesc.DepthOrArraySize = 1;
+    bufferDesc.MipLevels = 1;
+    bufferDesc.Format = DXGI_FORMAT_UNKNOWN;
+    bufferDesc.SampleDesc.Count = 1;
+    bufferDesc.SampleDesc.Quality = 0;
+    bufferDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    bufferDesc.Flags = flags;
+
+
+    D3D12_HEAP_PROPERTIES heapProps = {};
+    heapProps.Type = D3D12_HEAP_TYPE_UPLOAD; //
+
+    ID3D12Resource* buffer = nullptr;
+    device->CreateCommittedResource(
+        &heapProps,
+        D3D12_HEAP_FLAG_NONE,
+        &bufferDesc,
+        D3D12_RESOURCE_STATE_GENERIC_READ, // initial state
+        nullptr,
+        IID_PPV_ARGS(&buffer)
+    );
+
+  
+
+    return buffer;
+
+}
+
+int PollDX12WindowEvents()
+{
+    MSG msg;
+
+    int ret = 0;
+
+    while (PeekMessage(&msg, hwnd, 0, 0, PM_REMOVE))
+    {
+        TranslateMessage(&msg);
+        DispatchMessage(&msg);
+    }
+
+    return ret;
+}
+
+LRESULT CALLBACK winproc(HWND hwnd, UINT wm, WPARAM wp, LPARAM lp);
+
+int CreateDX12Window(int requestedDimensionX, int requestDimensionY)
+{
+    HINSTANCE hInst = GetModuleHandle(NULL);
+
+    WNDCLASSEX wc = { };
+
+    wc.cbSize = sizeof(wc);
+    wc.style = 0;
+    wc.lpfnWndProc = winproc;
+    wc.cbClsExtra = 0;
+    wc.cbWndExtra = 0;
+    wc.hInstance = hInst;
+    wc.hIcon = LoadIcon(NULL, IDI_APPLICATION);
+    wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+    wc.hbrBackground = (HBRUSH)GetStockObject(WHITE_BRUSH);
+    wc.lpszMenuName = NULL;
+    wc.lpszClassName = TEXT("DX12 Window");
+    wc.hIconSm = LoadIcon(NULL, IDI_APPLICATION);
+
+    if (!RegisterClassEx(&wc)) {
+        MessageBox(NULL, TEXT("Could not register window class"),
+            NULL, MB_ICONERROR);
+        return -1;
+    }
+
+    RECT wr = { 0, 0, 800, 600 };
+    DWORD style = WS_OVERLAPPEDWINDOW;
+    DWORD exStyle = 0;
+
+    AdjustWindowRectEx(&wr, style, FALSE, exStyle);
+
+    hwnd = CreateWindowEx(exStyle,
+        TEXT("DX12 Window"),
+        TEXT("DX12 Window"),
+        style,
+        CW_USEDEFAULT,
+        CW_USEDEFAULT,
+        wr.right - wr.left,
+        wr.bottom - wr.top,
+        NULL,
+        NULL,
+        hInst,
+        NULL);
+
+
+    if (!hwnd) {
+        MessageBox(NULL, TEXT("Could not create window"), NULL, MB_ICONERROR);
+        return -1;
+    }
+
+    SetWindowText(hwnd, TEXT("DX12 Window"));
+    ShowWindow(hwnd, 1);
+    UpdateWindow(hwnd);
+
+    return 0;
+}
+
+LRESULT CALLBACK winproc(HWND hwnd, UINT wm, WPARAM wp, LPARAM lp)
+{
+    if (wm == WM_DESTROY)
+    {
+        shouldClose = true;
+    }
+
+    return DefWindowProc(hwnd, wm, wp, lp);
+}
+
+void WriteToHostMemory(ID3D12Resource* bufferHandle, void* data, size_t size, size_t offset, int copies, size_t stride)
+{
+    void* mappedData = nullptr;
+ 
+
+    bufferHandle->Map(0, nullptr, &mappedData);
+
+    uintptr_t cdata = (uintptr_t)(mappedData);
+
+    for (int i = 0; i < copies; i++)
+    {
+        memcpy((void*)(cdata+offset), data, size);
+        cdata += stride;
+    }
+
+
+    bufferHandle->Unmap(0, nullptr);
+
+}
+
+void CreateSRVDescriptorHandle(ID3D12Device2* device, ID3D12Resource* bufferHandle, UINT offset, ID3D12DescriptorHeap* heap, UINT numCount, UINT size, DXGI_FORMAT format, UINT srvDescriptorSize, UINT descriptorHandleOffset)
+{
+   
+    UINT firstElement = offset / size;
+
+    CD3DX12_CPU_DESCRIPTOR_HANDLE srvHandle(heap->GetCPUDescriptorHandleForHeapStart(), descriptorHandleOffset, srvDescriptorSize);
+
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+    srvDesc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+    srvDesc.Format = DXGI_FORMAT_UNKNOWN; // structured buffer
+    srvDesc.Buffer.FirstElement = firstElement;
+    srvDesc.Buffer.NumElements = numCount;
+    srvDesc.Buffer.StructureByteStride = size;
+    srvDesc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
+    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+
+    device->CreateShaderResourceView(bufferHandle, &srvDesc, srvHandle);
+
+}
+
+void CreateUAVDescriptorHandle(ID3D12Device2* device, ID3D12Resource* bufferHandle, UINT offset, ID3D12DescriptorHeap* heap, UINT numCount, UINT size, DXGI_FORMAT format, UINT srvDescriptorSize, UINT descriptorHandleOffset)
+{
+
+    UINT firstElement = offset / size;
+
+    CD3DX12_CPU_DESCRIPTOR_HANDLE srvHandle(heap->GetCPUDescriptorHandleForHeapStart(), descriptorHandleOffset, srvDescriptorSize);
+
+
+    D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+
+    uavDesc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+    uavDesc.Format = DXGI_FORMAT_UNKNOWN; // structured buffer
+    uavDesc.Buffer.FirstElement = firstElement;
+    uavDesc.Buffer.NumElements = numCount;
+    uavDesc.Buffer.StructureByteStride = size;
+    uavDesc.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_NONE;
+
+
+    device->CreateUnorderedAccessView(bufferHandle, nullptr, &uavDesc, srvHandle);
+
+}
+
+void CreateCBVDescriptorHandle(ID3D12Device2* device, ID3D12Resource* bufferHandle, UINT offset, ID3D12DescriptorHeap* heap,  UINT size, UINT srvDescriptorSize, UINT descriptorHandleOffset)
+{
+
+    CD3DX12_CPU_DESCRIPTOR_HANDLE cbvHandle(heap->GetCPUDescriptorHandleForHeapStart(), descriptorHandleOffset, srvDescriptorSize);
+
+    D3D12_CONSTANT_BUFFER_VIEW_DESC cbvDesc = {};
+
+    cbvDesc.BufferLocation = bufferHandle->GetGPUVirtualAddress() + offset;
+    cbvDesc.SizeInBytes = (size + (255)) & ~255;
+
+    device->CreateConstantBufferView(&cbvDesc, cbvHandle);
+
+}
+
+ID3D12RootSignature* CreateRootSignature(ID3D12Device2* device, CD3DX12_ROOT_PARAMETER* rootParameters, UINT parameterCount)
+{
+    ID3D12RootSignature* rootSignature;
+
+    ID3DBlob* rootSigDescriptorLayout;
+
+    CD3DX12_ROOT_SIGNATURE_DESC rsigDesc = {};
+
+    rsigDesc.Init(parameterCount, rootParameters, 0, nullptr);
+
+
+    D3D12SerializeRootSignature(&rsigDesc, D3D_ROOT_SIGNATURE_VERSION_1, &rootSigDescriptorLayout, nullptr);
+
+    HRESULT hr = device->CreateRootSignature(0, rootSigDescriptorLayout->GetBufferPointer(), rootSigDescriptorLayout->GetBufferSize(), IID_PPV_ARGS(&rootSignature));
+
+    if (FAILED(hr))
+    {
+        printf("Failed to create root signature\n");
+    }
+
+    rootSigDescriptorLayout->Release();
+
+    return rootSignature;
+};
+
+
+ID3D12RootSignature* CreateGenericRootSignature()
+{
+    CD3DX12_ROOT_PARAMETER rootParameters[1]{};
+
+    CD3DX12_DESCRIPTOR_RANGE range;
+    range.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0); // 1 SRV at t0
+
+    CD3DX12_DESCRIPTOR_RANGE crange;
+    crange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_CBV, 1, 0); // 1 SRV at b0
+
+    CD3DX12_DESCRIPTOR_RANGE arr[2] = { crange, range };
+
+    rootParameters[0].InitAsDescriptorTable(2, arr, D3D12_SHADER_VISIBILITY_VERTEX);
+
+    ID3D12RootSignature* rootSignature = CreateRootSignature(deviceHandle, rootParameters, 1);
+    
+    return rootSignature;
+}
+
+void CreateDescriptorHeapManager(DescriptorHeap* heap, UINT maxDescriptorHandles, D3D12_DESCRIPTOR_HEAP_TYPE type, D3D12_DESCRIPTOR_HEAP_FLAGS flags)
+{
+    heap->descriptorHeap = CreateDescriptorHeap(deviceHandle, type, maxDescriptorHandles, flags, &heap->descriptorHeapHandleSize);
+    heap->maxDescriptorHeapHandles = maxDescriptorHandles;
+    heap->descriptorHeapHandlePointer = 0;
+}
+
+int CreateSRVSetRepeat(ID3D12Resource* bufferHandle, UINT byteOffset, UINT sizePerFrame, UINT strideSize, DXGI_FORMAT format, UINT numDescriptors, DescriptorHeap* heap, UINT cbvOffset)
+{
+    UINT numCount = (UINT)ceil(128 / 128);
+
+    int ret  = heap->descriptorHeapHandlePointer;
+
+    for (UINT i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+    {
+        CreateCBVDescriptorHandle(deviceHandle, bufferHandle, i*256+cbvOffset, heap->descriptorHeap, 64, heap->descriptorHeapHandleSize, heap->descriptorHeapHandlePointer);
+        heap->descriptorHeapHandlePointer++;
+        CreateSRVDescriptorHandle(deviceHandle,
+            bufferHandle, (3 * 256) + (128 * i),
+            heap->descriptorHeap,
+            numCount, 128,
+            DXGI_FORMAT_UNKNOWN,
+            heap->descriptorHeapHandleSize,
+            heap->descriptorHeapHandlePointer
+        );
+        heap->descriptorHeapHandlePointer++;
+    }
+
+    return ret;
+}
