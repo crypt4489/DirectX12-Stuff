@@ -95,10 +95,8 @@ void ReleaseD3D12Resources();
 int CreateDepthStencilView(ID3D12Device2* device, ID3D12DescriptorHeap* descriptorHeap, ID3D12Resource** outBuffers, UINT dsvDescriptorSize);
 ID3DBlob* CreateShaderBlob(const char* shaderfile);
 ID3D12Resource* CreateHostBuffer(ID3D12Device2* device, UINT size, D3D12_RESOURCE_FLAGS flags);
-void WriteToHostMemory(ID3D12Resource* bufferHandle, void* data, size_t size, size_t offset, int copies, size_t stride);
-void CreateSRVDescriptorHandle(ID3D12Device2* device, ID3D12Resource* bufferHandle, UINT offset, ID3D12DescriptorHeap* heap, UINT numCount, UINT size, DXGI_FORMAT format, UINT srvDescriptorSize, UINT descriptorHandleOffset);
-void CreateUAVDescriptorHandle(ID3D12Device2* device, ID3D12Resource* bufferHandle, UINT offset, ID3D12DescriptorHeap* heap, UINT numCount, UINT size, DXGI_FORMAT format, UINT srvDescriptorSize, UINT descriptorHandleOffset);
-void CreateCBVDescriptorHandle(ID3D12Device2* device, ID3D12Resource* bufferHandle, UINT offset, ID3D12DescriptorHeap* heap, UINT size, UINT srvDescriptorSize, UINT descriptorHandleOffset);
+void WriteToHostMemory(int allocationIndex, void* data, size_t size, size_t offset, int copies);
+
 struct Camera
 {
     XMMATRIX proj;
@@ -115,8 +113,10 @@ struct PipelineObject
     ID3D12RootSignature* rootSignature;
     ID3D12PipelineState* pipelineState;
     ID3D12DescriptorHeap* descriptorHeap;
-    int descriptorHeapPointer;
-    int descriptorHeapCount;
+    int descriptorHeapPointer[8];
+    int descriptorHeapCount[8];
+    int descriptorRootParameterIndices[8];
+    int descriptorTableCount;
     D3D_PRIMITIVE_TOPOLOGY topology;//D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST
     int vertexCount;
     int instanceCount;
@@ -148,10 +148,146 @@ struct DescriptorHeap
 
 DescriptorHeap mainSRVDescriptorHeap;
 
+
+struct Allocation
+{
+    int copies;
+    size_t offset;
+    size_t alignment; 
+    size_t stridesize; //amount of memory taken up per copy
+    size_t requestedsize;
+    ID3D12Resource* bufferHandle;
+    size_t totalDeviceAlloc;
+};
+
+static int allocationHandleIndex = 0;
+static size_t allocOffset = 0;
+
+Allocation allocationHandle[50];
+
+enum DescriptorType
+{
+    PUSHCONSTANTS = 0,
+    CONSTANTBUFFER = 1,
+    UNIFORMBUFFER = 2,
+};
+
+struct DescriptorTypeHeader
+{
+    DescriptorType type;
+};
+
+struct DescriptorTypeConstantBuffer : public DescriptorTypeHeader
+{
+    int allocationIndex;
+};
+
+struct DescriptorTypeUniformBuffer : public DescriptorTypeHeader
+{
+    int allocationIndex;
+    int numberOfElements;
+    DXGI_FORMAT format;
+};
+
 void CreateDescriptorHeapManager(DescriptorHeap* heap, UINT maxDescriptorHandles, D3D12_DESCRIPTOR_HEAP_TYPE type, D3D12_DESCRIPTOR_HEAP_FLAGS flags);
-int CreateSRVSetRepeat(ID3D12Resource* bufferHandle, UINT byteOffset, UINT sizePerFrame, UINT strideSize, DXGI_FORMAT format, UINT numDescriptors, DescriptorHeap* heap, UINT cbvOffset);
+int CreateUsefulDescriptor(int index, DescriptorHeap* heap);
+int CreateDescriptorTable(DescriptorTypeHeader** header, int descriptorCount, int frameCount, DescriptorHeap* heap);
+void CreateSRVDescriptorHandle(ID3D12Device2* device, ID3D12Resource* bufferHandle, UINT offset, UINT numCount, UINT size, DXGI_FORMAT format, DescriptorHeap* heap);
+void CreateUAVDescriptorHandle(ID3D12Device2* device, ID3D12Resource* bufferHandle, UINT offset, UINT numCount, UINT size, DXGI_FORMAT format, DescriptorHeap* heap);
+void CreateCBVDescriptorHandle(ID3D12Device2* device, ID3D12Resource* bufferHandle, UINT offset, UINT size, DescriptorHeap* heap);
+
+int AllocFromHostBuffer(size_t size, size_t alignment, int copies)
+{
+ 
+    size_t allocSize = (size + alignment - 1) & ~((size_t)alignment - 1);
+
+    allocSize *= copies;
+
+    size_t location = (allocOffset + alignment -1) & ~(alignment-1);
+
+    allocOffset += (allocSize + (location - allocOffset));
+
+    int index = allocationHandleIndex++;
+    allocationHandle[index].bufferHandle = globalBufferResource;
+    allocationHandle[index].offset = location;
+    allocationHandle[index].totalDeviceAlloc = allocSize;
+    allocationHandle[index].requestedsize = size;
+    allocationHandle[index].alignment = alignment;
+    allocationHandle[index].copies = copies;
+    allocationHandle[index].stridesize = (size + alignment - 1) & ~(alignment - 1);
+
+    return index;
+}
 
 
+DescriptorTypeUniformBuffer cameraBufferResource;
+DescriptorTypeConstantBuffer world1Resource, world2Resource;
+
+void DoSceneStuff()
+{
+    int cameraData = AllocFromHostBuffer(sizeof(Camera), sizeof(Camera), MAX_FRAMES_IN_FLIGHT);
+    int world1Data = AllocFromHostBuffer(sizeof(XMMATRIX), 256, 3);
+    int world2Data = AllocFromHostBuffer(sizeof(XMMATRIX), 256, 3);
+
+    WriteToHostMemory(cameraData, &cam, sizeof(Camera), 0, MAX_FRAMES_IN_FLIGHT);
+
+    WriteToHostMemory(world1Data, world, 64, 0, MAX_FRAMES_IN_FLIGHT);
+
+    WriteToHostMemory(world2Data, &world[1], 64, 0, MAX_FRAMES_IN_FLIGHT);
+
+    cameraBufferResource.type = UNIFORMBUFFER;
+    cameraBufferResource.format = DXGI_FORMAT_UNKNOWN;
+    cameraBufferResource.allocationIndex = cameraData;
+    cameraBufferResource.numberOfElements = 1;
+    
+    world1Resource.type = CONSTANTBUFFER;
+    world1Resource.allocationIndex = world1Data;
+
+    world2Resource.type = CONSTANTBUFFER;
+    world2Resource.allocationIndex = world2Data;
+
+    DescriptorTypeHeader* types3[1] = { (DescriptorTypeHeader*)&cameraBufferResource };
+
+    int camSRV = CreateDescriptorTable(types3, 1, MAX_FRAMES_IN_FLIGHT, &mainSRVDescriptorHeap);
+
+
+    DescriptorTypeHeader* types[1] = { (DescriptorTypeHeader*)&world1Resource };
+
+    triangles[0].descriptorHeapPointer[0] = camSRV;
+    triangles[1].descriptorHeapPointer[0] = camSRV;
+    triangles[0].descriptorHeapPointer[1] = CreateDescriptorTable(types, 1, MAX_FRAMES_IN_FLIGHT, &mainSRVDescriptorHeap);
+
+    triangles[0].topology = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+    triangles[0].instanceCount = 1;
+    triangles[0].vertexCount = 3;
+    triangles[0].descriptorHeap = mainSRVDescriptorHeap.descriptorHeap;
+    triangles[0].descriptorHeapCount[0] = 1;
+    triangles[0].descriptorHeapCount[1] = 1;
+
+    triangles[0].descriptorTableCount = 2;
+    triangles[0].descriptorRootParameterIndices[0] = 1;
+    triangles[0].descriptorRootParameterIndices[1] = 0;
+
+    triangles[1].topology = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+    triangles[1].instanceCount = 1;
+    triangles[1].vertexCount = 3;
+    triangles[1].descriptorHeap = mainSRVDescriptorHeap.descriptorHeap;
+    triangles[1].descriptorHeapCount[0] = 1;
+    triangles[1].descriptorHeapCount[1] = 1;
+    triangles[1].pipelineState = triangles[0].pipelineState;
+    triangles[1].rootSignature = triangles[0].rootSignature;
+
+    triangles[1].descriptorTableCount = 2;
+
+    triangles[1].descriptorRootParameterIndices[0] = 1;
+    triangles[1].descriptorRootParameterIndices[1] = 0;
+
+    DescriptorTypeHeader* types2[1] = { (DescriptorTypeHeader*)&world2Resource };
+
+    triangles[1].descriptorHeapPointer[1] = CreateDescriptorTable(types2, 1, MAX_FRAMES_IN_FLIGHT, &mainSRVDescriptorHeap);
+
+
+}
 
 int main()
 {
@@ -267,31 +403,16 @@ int main()
 
     globalBufferResource = CreateHostBuffer(deviceHandle, 4096, D3D12_RESOURCE_FLAG_NONE);
 
-    WriteToHostMemory(globalBufferResource, world, 64, 0, 3, 256);
 
-    WriteToHostMemory(globalBufferResource, &cam, sizeof(Camera), 3*256, MAX_FRAMES_IN_FLIGHT, sizeof(Camera));
+  
+
+    DoSceneStuff();
+
+
+  
+
     
-    triangles[0].descriptorHeapPointer = CreateSRVSetRepeat(globalBufferResource, 3*256, sizeof(Camera), 128, DXGI_FORMAT_UNKNOWN, MAX_FRAMES_IN_FLIGHT, &mainSRVDescriptorHeap, 0);
-
-    triangles[0].topology = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
-    triangles[0].instanceCount = 1;
-    triangles[0].vertexCount = 3;
-    triangles[0].descriptorHeap = mainSRVDescriptorHeap.descriptorHeap;
-    triangles[0].descriptorHeapCount = 2;
-    triangles[0].descriptorHeapPointer = 0;
-
-    triangles[1].topology = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
-    triangles[1].instanceCount = 1;
-    triangles[1].vertexCount = 3;
-    triangles[1].descriptorHeap = mainSRVDescriptorHeap.descriptorHeap;
-    triangles[1].descriptorHeapCount = 2;
-    triangles[1].descriptorHeapPointer = 0;
-    triangles[1].pipelineState = triangles[0].pipelineState;
-    triangles[1].rootSignature = triangles[0].rootSignature;
-
-    WriteToHostMemory(globalBufferResource, &world[1], 64, 1280, 3, 256);
-
-    triangles[1].descriptorHeapPointer = CreateSRVSetRepeat(globalBufferResource, 3 * 256, sizeof(Camera), 128, DXGI_FORMAT_UNKNOWN, MAX_FRAMES_IN_FLIGHT, &mainSRVDescriptorHeap, 1280);
+   
 
     g_IsInitialized = true;
 
@@ -1029,15 +1150,25 @@ int Render()
 
     for(int i = 0; i<2; i++)
     {
-        CD3DX12_GPU_DESCRIPTOR_HANDLE handle = CD3DX12_GPU_DESCRIPTOR_HANDLE(triangles[i].descriptorHeap->GetGPUDescriptorHandleForHeapStart(), triangles[i].descriptorHeapPointer + (currentFrame * triangles[i].descriptorHeapCount), mainSRVDescriptorHeap.descriptorHeapHandleSize);
-
         graphicCommandBuffer->SetGraphicsRootSignature(triangles[i].rootSignature);
 
         graphicCommandBuffer->SetDescriptorHeaps(1, &triangles[i].descriptorHeap);
-        graphicCommandBuffer->SetGraphicsRootDescriptorTable(0, handle);
 
         graphicCommandBuffer->SetPipelineState(triangles[i].pipelineState);
         graphicCommandBuffer->IASetPrimitiveTopology(triangles[i].topology);
+
+        
+
+        
+        for (int j = 0; j < triangles[i].descriptorTableCount; j++)
+        {
+            CD3DX12_GPU_DESCRIPTOR_HANDLE handle = CD3DX12_GPU_DESCRIPTOR_HANDLE(triangles[i].descriptorHeap->GetGPUDescriptorHandleForHeapStart(), triangles[i].descriptorHeapPointer[j] + (currentFrame * triangles[i].descriptorHeapCount[j]), mainSRVDescriptorHeap.descriptorHeapHandleSize);
+            graphicCommandBuffer->SetGraphicsRootDescriptorTable(triangles[i].descriptorRootParameterIndices[j], handle);
+        }
+        
+        
+
+        
 
         
         //graphicCommandBuffer->SetGraphicsRoot32BitConstants(0, 32, &cam, 0);
@@ -1212,32 +1343,35 @@ LRESULT CALLBACK winproc(HWND hwnd, UINT wm, WPARAM wp, LPARAM lp)
     return DefWindowProc(hwnd, wm, wp, lp);
 }
 
-void WriteToHostMemory(ID3D12Resource* bufferHandle, void* data, size_t size, size_t offset, int copies, size_t stride)
+void WriteToHostMemory(int allocationIndex, void* data, size_t size, size_t offset, int copies)
 {
     void* mappedData = nullptr;
  
+    Allocation* alloc = &allocationHandle[allocationIndex];
 
-    bufferHandle->Map(0, nullptr, &mappedData);
+    alloc->bufferHandle->Map(0, nullptr, &mappedData);
 
     uintptr_t cdata = (uintptr_t)(mappedData);
 
+    size_t stride = (alloc->requestedsize + alloc->alignment - 1) & ~(alloc->alignment - 1);
+
     for (int i = 0; i < copies; i++)
     {
-        memcpy((void*)(cdata+offset), data, size);
-        cdata += stride;
+        memcpy((void*)(cdata+alloc->offset+offset), data, size);
+        offset += stride;
     }
 
 
-    bufferHandle->Unmap(0, nullptr);
+    alloc->bufferHandle->Unmap(0, nullptr);
 
 }
 
-void CreateSRVDescriptorHandle(ID3D12Device2* device, ID3D12Resource* bufferHandle, UINT offset, ID3D12DescriptorHeap* heap, UINT numCount, UINT size, DXGI_FORMAT format, UINT srvDescriptorSize, UINT descriptorHandleOffset)
+void CreateSRVDescriptorHandle(ID3D12Device2* device, ID3D12Resource* bufferHandle, UINT offset, UINT numCount, UINT size, DXGI_FORMAT format, DescriptorHeap* heap)
 {
    
     UINT firstElement = offset / size;
 
-    CD3DX12_CPU_DESCRIPTOR_HANDLE srvHandle(heap->GetCPUDescriptorHandleForHeapStart(), descriptorHandleOffset, srvDescriptorSize);
+    CD3DX12_CPU_DESCRIPTOR_HANDLE srvHandle(heap->descriptorHeap->GetCPUDescriptorHandleForHeapStart(), heap->descriptorHeapHandlePointer, heap->descriptorHeapHandleSize);
 
     D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
     srvDesc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
@@ -1250,14 +1384,16 @@ void CreateSRVDescriptorHandle(ID3D12Device2* device, ID3D12Resource* bufferHand
 
     device->CreateShaderResourceView(bufferHandle, &srvDesc, srvHandle);
 
+    heap->descriptorHeapHandlePointer++;
+
 }
 
-void CreateUAVDescriptorHandle(ID3D12Device2* device, ID3D12Resource* bufferHandle, UINT offset, ID3D12DescriptorHeap* heap, UINT numCount, UINT size, DXGI_FORMAT format, UINT srvDescriptorSize, UINT descriptorHandleOffset)
+void CreateUAVDescriptorHandle(ID3D12Device2* device, ID3D12Resource* bufferHandle, UINT offset, UINT numCount, UINT size, DXGI_FORMAT format, DescriptorHeap* heap)
 {
 
     UINT firstElement = offset / size;
 
-    CD3DX12_CPU_DESCRIPTOR_HANDLE srvHandle(heap->GetCPUDescriptorHandleForHeapStart(), descriptorHandleOffset, srvDescriptorSize);
+    CD3DX12_CPU_DESCRIPTOR_HANDLE uavHandle(heap->descriptorHeap->GetCPUDescriptorHandleForHeapStart(), heap->descriptorHeapHandlePointer, heap->descriptorHeapHandleSize);
 
 
     D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
@@ -1270,14 +1406,16 @@ void CreateUAVDescriptorHandle(ID3D12Device2* device, ID3D12Resource* bufferHand
     uavDesc.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_NONE;
 
 
-    device->CreateUnorderedAccessView(bufferHandle, nullptr, &uavDesc, srvHandle);
+    device->CreateUnorderedAccessView(bufferHandle, nullptr, &uavDesc, uavHandle);
+
+    heap->descriptorHeapHandlePointer++;
 
 }
 
-void CreateCBVDescriptorHandle(ID3D12Device2* device, ID3D12Resource* bufferHandle, UINT offset, ID3D12DescriptorHeap* heap,  UINT size, UINT srvDescriptorSize, UINT descriptorHandleOffset)
+void CreateCBVDescriptorHandle(ID3D12Device2* device, ID3D12Resource* bufferHandle, UINT offset, UINT size, DescriptorHeap* heap)
 {
 
-    CD3DX12_CPU_DESCRIPTOR_HANDLE cbvHandle(heap->GetCPUDescriptorHandleForHeapStart(), descriptorHandleOffset, srvDescriptorSize);
+    CD3DX12_CPU_DESCRIPTOR_HANDLE cbvHandle(heap->descriptorHeap->GetCPUDescriptorHandleForHeapStart(), heap->descriptorHeapHandlePointer, heap->descriptorHeapHandleSize);
 
     D3D12_CONSTANT_BUFFER_VIEW_DESC cbvDesc = {};
 
@@ -1285,6 +1423,8 @@ void CreateCBVDescriptorHandle(ID3D12Device2* device, ID3D12Resource* bufferHand
     cbvDesc.SizeInBytes = (size + (255)) & ~255;
 
     device->CreateConstantBufferView(&cbvDesc, cbvHandle);
+
+    heap->descriptorHeapHandlePointer++;
 
 }
 
@@ -1316,7 +1456,7 @@ ID3D12RootSignature* CreateRootSignature(ID3D12Device2* device, CD3DX12_ROOT_PAR
 
 ID3D12RootSignature* CreateGenericRootSignature()
 {
-    CD3DX12_ROOT_PARAMETER rootParameters[1]{};
+    CD3DX12_ROOT_PARAMETER rootParameters[2]{};
 
     CD3DX12_DESCRIPTOR_RANGE range;
     range.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0); // 1 SRV at t0
@@ -1326,9 +1466,10 @@ ID3D12RootSignature* CreateGenericRootSignature()
 
     CD3DX12_DESCRIPTOR_RANGE arr[2] = { crange, range };
 
-    rootParameters[0].InitAsDescriptorTable(2, arr, D3D12_SHADER_VISIBILITY_VERTEX);
+    rootParameters[0].InitAsDescriptorTable(1, arr, D3D12_SHADER_VISIBILITY_VERTEX);
+    rootParameters[1].InitAsDescriptorTable(1, arr + 1, D3D12_SHADER_VISIBILITY_VERTEX);
 
-    ID3D12RootSignature* rootSignature = CreateRootSignature(deviceHandle, rootParameters, 1);
+    ID3D12RootSignature* rootSignature = CreateRootSignature(deviceHandle, rootParameters, 2);
     
     return rootSignature;
 }
@@ -1340,26 +1481,59 @@ void CreateDescriptorHeapManager(DescriptorHeap* heap, UINT maxDescriptorHandles
     heap->descriptorHeapHandlePointer = 0;
 }
 
-int CreateSRVSetRepeat(ID3D12Resource* bufferHandle, UINT byteOffset, UINT sizePerFrame, UINT strideSize, DXGI_FORMAT format, UINT numDescriptors, DescriptorHeap* heap, UINT cbvOffset)
+int CreateUsefulDescriptor(int index, DescriptorHeap* heap)
 {
-    UINT numCount = (UINT)ceil(128 / 128);
-
-    int ret  = heap->descriptorHeapHandlePointer;
-
-    for (UINT i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+    int ret = -1;
+    if (index == 1)
     {
-        CreateCBVDescriptorHandle(deviceHandle, bufferHandle, i*256+cbvOffset, heap->descriptorHeap, 64, heap->descriptorHeapHandleSize, heap->descriptorHeapHandlePointer);
-        heap->descriptorHeapHandlePointer++;
-        CreateSRVDescriptorHandle(deviceHandle,
-            bufferHandle, (3 * 256) + (128 * i),
-            heap->descriptorHeap,
-            numCount, 128,
-            DXGI_FORMAT_UNKNOWN,
-            heap->descriptorHeapHandleSize,
-            heap->descriptorHeapHandlePointer
-        );
-        heap->descriptorHeapHandlePointer++;
+        DescriptorTypeHeader* types[2] = {  (DescriptorTypeHeader*)&world2Resource, (DescriptorTypeHeader*)&cameraBufferResource, };
+        ret = CreateDescriptorTable(types, 2, MAX_FRAMES_IN_FLIGHT, heap);
+    }
+    else
+    {
+        DescriptorTypeHeader* types[2] = {  (DescriptorTypeHeader*)&world1Resource, (DescriptorTypeHeader*)&cameraBufferResource, };
+        ret =  CreateDescriptorTable(types, 2, MAX_FRAMES_IN_FLIGHT, heap);
     }
 
     return ret;
+}
+
+int CreateDescriptorTable(DescriptorTypeHeader** header, int descriptorCount, int frameCount, DescriptorHeap* heap)
+{
+    int heapstart = heap->descriptorHeapHandlePointer;
+    for (int i = 0; i < frameCount; i++)
+    {
+        for (int j = 0; j < descriptorCount; j++)
+        {
+            switch (header[j]->type)
+            {
+            case PUSHCONSTANTS:
+                break;
+            case CONSTANTBUFFER:
+            {
+                DescriptorTypeConstantBuffer* cbType = (DescriptorTypeConstantBuffer*)header[j];
+
+                Allocation* alloc = &allocationHandle[cbType->allocationIndex];
+
+                CreateCBVDescriptorHandle(deviceHandle, alloc->bufferHandle, i * alloc->stridesize + alloc->offset, alloc->stridesize , heap);
+                break;
+            }
+            case UNIFORMBUFFER:
+            {
+                DescriptorTypeUniformBuffer* ubType = (DescriptorTypeUniformBuffer*)header[j];
+
+                Allocation* alloc = &allocationHandle[ubType->allocationIndex];
+                CreateSRVDescriptorHandle(deviceHandle,
+                    alloc->bufferHandle, i * alloc->stridesize + alloc->offset,
+                    ubType->numberOfElements, alloc->requestedsize,
+                    ubType->format,
+                    heap
+                );
+                break;
+            }
+            }
+        }
+    }
+
+    return heapstart;
 }
