@@ -1,4 +1,8 @@
 
+
+//dxc.exe -T ps_6_0 -E PixelShaderFunction basicvertex.hlsl -Fo PS.bin
+//dxc.exe -T vs_6_0 -E VertexMain basicvertex.hlsl -Fo VS.bin
+
 cbuffer RootConstants : register(b0)
 {
     float4x4 world;
@@ -13,6 +17,9 @@ struct Cam
 
 StructuredBuffer<Cam> myBuffer : register(t0);
 
+Texture2D myTexture : register(t1); // SRV bound to t0
+SamplerState mySampler : register(s0); // Sampler bound to s0
+
 struct VSInput
 {
     uint vertexID : SV_VertexID;
@@ -21,7 +28,7 @@ struct VSInput
 struct VSOutput
 {
     float4 position : SV_Position;
-    float4 color : COLOR0;
+    float2 tex : TEXCOORD0;
 };
 
 VSOutput VertexMain(VSInput input)
@@ -36,29 +43,45 @@ VSOutput VertexMain(VSInput input)
 
     VSOutput outv;
     
-    float2 positions[3] =
+    float2 positions[4] =
     {
-        float2(0.0f, 0.5f),
+        float2(-0.5f, 0.5f),
         float2(0.5f, -0.5f),
-        float2(-0.5f, -0.5f)
+        float2(-0.5f, -0.5f),
+        float2(0.5f, 0.5f)
+    };
+    
+    float2 texes[4] =
+    {
+        float2(0.0f, 1.0f),
+        float2(1.0f, 0.0f),
+        float2(0.0f, 0.0f),
+        float2(1.0f, 1.0f)
+    };
+    
+    int indices[6] =
+    {
+        2, 0, 1, 1, 0, 3
     };
     
     Cam cam = myBuffer[0];
    
     
     float4x4 viewProj = mul(cam.proj, cam.view);
-    outv.position = mul(viewProj, mul(world, float4(positions[input.vertexID], 0.5f, 1.0f)));
-    outv.color = transpose(cam.view)[2];
+    outv.position = mul(viewProj, mul(world, float4(positions[indices[input.vertexID]], 0.5f, 1.0f)));
+    outv.tex = texes[indices[input.vertexID]];
     return outv;
 }
 
 struct PSInput
 {
     float4 position : SV_Position;
-    float4 color : COLOR0;
+    float2 tex : TEXCOORD0;
 };
 
 float4 PixelShaderFunction(PSInput input) : SV_Target
 { 
-    return float4(input.color.xyz, 1.0);
+    float2 outc = input.tex;
+    outc.y = 1.0f - outc.y;
+    return myTexture.Sample(mySampler, outc);
 }
