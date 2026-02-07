@@ -22,6 +22,7 @@ SamplerState mySampler : register(s0); // Sampler bound to s0
 
 struct VSInput
 {
+    float4 position : POSITION;
     uint vertexID : SV_VertexID;
 };
 
@@ -35,21 +36,15 @@ VSOutput VertexMain(VSInput input)
 {
     
     float4x4 identity = float4x4(
-    1.0, 0.0, 0.0, 0.0,
-    0.0, 1.0, 0.0, 0.0,
-    0.0, 0.0, 1.0, 0.0,
-    0.0, 0.0, 0.0, 1.0
-);
+        1.0, 0.0, 0.0, 0.0,
+        0.0, 1.0, 0.0, 0.0,
+        0.0, 0.0, 1.0, 0.0,
+        0.0, 0.0, 0.0, 1.0
+    );
 
     VSOutput outv;
     
-    float2 positions[4] =
-    {
-        float2(-0.5f, 0.5f),
-        float2(0.5f, -0.5f),
-        float2(-0.5f, -0.5f),
-        float2(0.5f, 0.5f)
-    };
+   
     
     float2 texes[4] =
     {
@@ -68,8 +63,8 @@ VSOutput VertexMain(VSInput input)
    
     
     float4x4 viewProj = mul(cam.proj, cam.view);
-    outv.position = mul(viewProj, mul(world, float4(positions[indices[input.vertexID]], 0.5f, 1.0f)));
-    outv.tex = texes[indices[input.vertexID]];
+    outv.position = mul(viewProj, mul(world, input.position));
+    outv.tex = texes[indices[input.vertexID % 6]];
     return outv;
 }
 

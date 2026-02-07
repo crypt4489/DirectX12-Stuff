@@ -309,6 +309,8 @@ ID3D12GraphicsCommandList* graphicCommandBuffers[MAX_FRAMES_IN_FLIGHT];
 ID3D12CommandAllocator* graphicCommandPools[MAX_FRAMES_IN_FLIGHT];
 
 ID3D12CommandAllocator* transferCommandPool;
+ID3D12GraphicsCommandList* transferCommandBuffer;
+int transferCommandsUploaded = 0;
 
 ID3D12DescriptorHeap* globalRTVDescriptorHeap;
 ID3D12DescriptorHeap* globalDSVDescriptorHeap;
@@ -323,6 +325,11 @@ ID3D12Fence* g_Fence;
 
 uint64_t g_FenceValue = 0;
 
+ID3D12Fence* t_Fence;
+
+uint64_t t_FenceValue = 0;
+
+HANDLE t_FenceEvent = INVALID_HANDLE_VALUE;
 
 uint64_t g_FrameFenceValues[MAX_FRAMES_IN_FLIGHT] = {};
 
@@ -351,6 +358,8 @@ ShaderHandles shaderHandles[2];
 ID3D12Resource* globalHostBufferResource, *globalDeviceBufferResource;
 
 ID3D12Resource* stagingBuffers[MAX_FRAMES_IN_FLIGHT];
+
+size_t stagingbufferoffsets[MAX_FRAMES_IN_FLIGHT];
 
 
 ID3D12Resource* bgraImageMemoryPool;
@@ -389,7 +398,7 @@ ID3DBlob* CreateShaderBlob(const char* shaderfile);
 ID3D12Resource* CreateHostBuffer(ID3D12Device2* device, UINT size, D3D12_RESOURCE_FLAGS flags);
 ID3D12Resource* CreateDeviceLocalBuffer(ID3D12Device2* device, UINT size, D3D12_RESOURCE_FLAGS flags);
 void WriteToHostMemory(int allocationIndex, void* data, size_t size, size_t offset, int copies);
-void WriteToDeviceLocalMemory(int allocationIndex, void* data, size_t size, size_t offset, int copies, D3D12_RESOURCE_STATES destinationStage);
+void WriteToDeviceLocalMemory(int allocationIndex, void* data, size_t size, size_t offset, int copies, D3D12_RESOURCE_STATES srcStage, D3D12_RESOURCE_STATES destinationStage);
 
 ID3D12Resource* CreateImageResource(ID3D12Device2* device, UINT width, UINT height, UINT depth, UINT mips, D3D12_RESOURCE_FLAGS flags, DXGI_FORMAT format, D3D12_RESOURCE_DIMENSION dimension);
 void WriteToImageDeviceLocalMemory(ID3D12Resource* imageHandle, char* data, UINT width, UINT height, UINT componentCount, UINT totalImageSize, DXGI_FORMAT format, UINT mipLevels, UINT layers);
@@ -410,22 +419,34 @@ struct PipelineObject
 {
     ID3D12RootSignature* rootSignature;
     ID3D12PipelineState* pipelineState;
+    int heapsCount;
     ID3D12DescriptorHeap* descriptorHeap[8];
+    int descriptorTableCount;
     int descriptorHeapPointer[8];
-    int descriptorHeapCount[8];
+    int resourceCount[8];
     int descriptorRootParameterIndices[8];
     int descriptorHeapSelection[8]; //number of descriptor tables
-    int descriptorTableCount;
     D3D_PRIMITIVE_TOPOLOGY topology;//D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST
-    int vertexCount;
     int instanceCount;
+    
+    ID3D12Resource* vertexBuffer;
+    UINT vertexBufferOffset;
+    UINT vertexBufferSize;
+    int vertexSize;
+    int vertexCount;
+    ID3D12Resource* indexBuffer;
+    UINT indexBufferOffset;
+    UINT indexBufferSize;
+    int indexSize;
+    int indexCount;
+
 };
 
 
 PipelineObject triangles[2];
 
 ID3D12PipelineState* CreatePipelineStateObject(ID3D12Device2* device, ID3D12RootSignature* _rootSignature, ShaderHandles* handles, int count);
-ID3D12RootSignature* CreateRootSignature(ID3D12Device2* device, CD3DX12_ROOT_PARAMETER* rootParameters, UINT parameterCount);
+ID3D12RootSignature* CreateRootSignature(ID3D12Device2* device, CD3DX12_ROOT_PARAMETER* rootParameters, UINT parameterCount, D3D12_ROOT_SIGNATURE_FLAGS flags);
 ID3D12RootSignature* CreateGenericRootSignature();
 
 
@@ -505,6 +526,53 @@ void CreateImageSRVDescriptorHandle(ID3D12Device2* device, ID3D12Resource* buffe
 void CreateUAVDescriptorHandle(ID3D12Device2* device, ID3D12Resource* bufferHandle, UINT offset, UINT numCount, UINT size, DXGI_FORMAT format, DescriptorHeap* heap);
 void CreateCBVDescriptorHandle(ID3D12Device2* device, ID3D12Resource* bufferHandle, UINT offset, UINT size, DescriptorHeap* heap);
 void CreateImageSampler(ID3D12Device2* device, DescriptorHeap* samplerDescriptorHeap);
+
+
+static uint16_t BoxIndices[36] = {
+        2,  1,  0,
+        1,  2,  3,
+        4,  5,  6,
+        7,  6,  5,
+        8,  9,  10,
+        11, 10, 9,
+       14, 13, 12,
+       13, 14, 15,
+       18, 17, 16,
+       17, 18, 19,
+       20, 21, 22,
+       23, 22, 21
+};
+
+static XMVECTOR BoxVerts[24] =
+{
+    XMVectorSet(1.0,  1.0,  1.0, 1.0),
+    XMVectorSet(1.0,  1.0, -1.0, 1.0),
+    XMVectorSet(1.0, -1.0,  1.0, 1.0),
+    XMVectorSet(1.0, -1.0, -1.0, 1.0),
+    XMVectorSet(-1.0,  1.0,  1.0, 1.0),
+    XMVectorSet(-1.0,  1.0, -1.0, 1.0),
+    XMVectorSet(-1.0, -1.0,  1.0, 1.0),
+    XMVectorSet(-1.0, -1.0, -1.0, 1.0),
+    XMVectorSet(-1.0,  1.0,  1.0, 1.0),
+    XMVectorSet(1.0,  1.0,  1.0, 1.0),
+    XMVectorSet(-1.0,  1.0, -1.0, 1.0),
+    XMVectorSet(1.0,  1.0, -1.0, 1.0),
+    XMVectorSet(-1.0, -1.0,  1.0, 1.0),
+    XMVectorSet(1.0, -1.0,  1.0, 1.0),
+    XMVectorSet(-1.0, -1.0, -1.0, 1.0),
+    XMVectorSet(1.0, -1.0, -1.0, 1.0),
+    XMVectorSet(-1.0,  1.0,  1.0, 1.0),
+    XMVectorSet(1.0,  1.0,  1.0, 1.0),
+    XMVectorSet(-1.0, -1.0,  1.0, 1.0),
+    XMVectorSet(1.0, -1.0,  1.0, 1.0),
+    XMVectorSet(-1.0,  1.0, -1.0, 1.0),
+    XMVectorSet(1.0,  1.0, -1.0, 1.0),
+    XMVectorSet(-1.0, -1.0, -1.0, 1.0),
+    XMVectorSet(1.0, -1.0, -1.0, 1.0)
+};
+
+
+
 int AllocFromHostBuffer(size_t size, size_t alignment, int copies)
 {
  
@@ -560,15 +628,29 @@ DescriptorTypeImageSRV imageSrv = {};
 
 void DoSceneStuff()
 {
+    TextureDetails details{};
+
+    ParseBMP(&details, "face1.bmp");
+
     int cameraData = AllocFromHostBuffer(sizeof(Camera), sizeof(Camera), MAX_FRAMES_IN_FLIGHT);
     int world1Data = AllocFromDeviceBuffer(sizeof(XMMATRIX), 256, MAX_FRAMES_IN_FLIGHT);
     int world2Data = AllocFromDeviceBuffer(sizeof(XMMATRIX), 256, MAX_FRAMES_IN_FLIGHT);
+    int vertexOffset = AllocFromDeviceBuffer(sizeof(BoxVerts), 16, 1);
+    int indexOffset = AllocFromDeviceBuffer(sizeof(BoxIndices), 16, 1);
+
+    WriteToDeviceLocalMemory(vertexOffset, BoxVerts, sizeof(BoxVerts), 0, 1, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+
+    WriteToDeviceLocalMemory(indexOffset, BoxIndices, sizeof(BoxIndices), 0, 1, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER, D3D12_RESOURCE_STATE_INDEX_BUFFER);
 
     WriteToHostMemory(cameraData, &cam, sizeof(Camera), 0, MAX_FRAMES_IN_FLIGHT);
 
-    WriteToDeviceLocalMemory(world1Data, world, 64, 0, MAX_FRAMES_IN_FLIGHT, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+    WriteToDeviceLocalMemory(world1Data, world, 64, 0, MAX_FRAMES_IN_FLIGHT, D3D12_RESOURCE_STATE_INDEX_BUFFER, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
 
-    WriteToDeviceLocalMemory(world2Data, &world[1], 64, 0, MAX_FRAMES_IN_FLIGHT, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+    WriteToDeviceLocalMemory(world2Data, &world[1], 64, 0, MAX_FRAMES_IN_FLIGHT, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+
+    bgraImageMemoryPool = CreateImageResource(deviceHandle, details.width, details.height, 1, details.miplevels, D3D12_RESOURCE_FLAG_NONE, details.type, D3D12_RESOURCE_DIMENSION_TEXTURE2D);
+
+    WriteToImageDeviceLocalMemory(bgraImageMemoryPool, details.data, details.width, details.height, 4, details.dataSize, details.type, details.miplevels, 1);
 
     cameraBufferResource.type = UNIFORMBUFFER;
     cameraBufferResource.format = DXGI_FORMAT_UNKNOWN;
@@ -581,18 +663,6 @@ void DoSceneStuff()
     world2Resource.type = CONSTANTBUFFER;
     world2Resource.allocationIndex = world2Data;
 
-
-
-    TextureDetails details{};
-
-    ParseBMP(&details, "face1.bmp");
-
-
-    bgraImageMemoryPool = CreateImageResource(deviceHandle, details.width, details.height, 1, details.miplevels, D3D12_RESOURCE_FLAG_NONE, details.type, D3D12_RESOURCE_DIMENSION_TEXTURE2D);
-
-
-    WriteToImageDeviceLocalMemory(bgraImageMemoryPool, details.data, details.width, details.height, 4, details.dataSize, details.type, details.miplevels, 1);
-
     imageSrv.type = IMAGESRV;
     imageSrv.format = details.type;
     imageSrv.image = bgraImageMemoryPool;
@@ -604,21 +674,24 @@ void DoSceneStuff()
 
     DescriptorTypeHeader* types[1] = { (DescriptorTypeHeader*)&world1Resource  };
 
-    DescriptorTypeHeader* what[1] = { &sampler };
+    DescriptorTypeHeader* samplers[1] = { &sampler };
 
     triangles[0].descriptorHeapPointer[0] = camSRV;
     triangles[1].descriptorHeapPointer[0] = camSRV;
     triangles[0].descriptorHeapPointer[1] = CreateDescriptorTable(types, 1, MAX_FRAMES_IN_FLIGHT, &mainSRVDescriptorHeap);
-    triangles[0].descriptorHeapPointer[2] = CreateDescriptorTable(what, 1, MAX_FRAMES_IN_FLIGHT, &mainSVDescriptorHeap);
+    triangles[0].descriptorHeapPointer[2] = CreateDescriptorTable(samplers, 1, MAX_FRAMES_IN_FLIGHT, &mainSVDescriptorHeap);
     triangles[1].descriptorHeapPointer[2] = triangles[0].descriptorHeapPointer[2];
+    
     triangles[0].topology = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+    triangles[0].heapsCount = 2;
     triangles[0].instanceCount = 1;
-    triangles[0].vertexCount = 6;
+    triangles[0].vertexCount = 24;
+    triangles[0].indexCount = 36;
     triangles[0].descriptorHeap[0] = mainSRVDescriptorHeap.descriptorHeap;
     triangles[0].descriptorHeap[1] = mainSVDescriptorHeap.descriptorHeap;
-    triangles[0].descriptorHeapCount[0] = 2;
-    triangles[0].descriptorHeapCount[1] = 1;
-    triangles[0].descriptorHeapCount[2] = 1;
+    triangles[0].resourceCount[0] = 2;
+    triangles[0].resourceCount[1] = 1;
+    triangles[0].resourceCount[2] = 1;
     triangles[0].descriptorHeapSelection[0] = 0;
     triangles[0].descriptorHeapSelection[1] = 0;
     triangles[0].descriptorHeapSelection[2] = 1;
@@ -629,16 +702,18 @@ void DoSceneStuff()
     triangles[0].descriptorRootParameterIndices[2] = 2;
 
     triangles[1].topology = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+    triangles[1].heapsCount = 2;
     triangles[1].instanceCount = 1;
-    triangles[1].vertexCount = 6;
+    triangles[1].vertexCount = 24;
+    triangles[1].indexCount = 36;
     triangles[1].descriptorHeap[0] = mainSRVDescriptorHeap.descriptorHeap;
     triangles[1].descriptorHeap[1] = mainSVDescriptorHeap.descriptorHeap;
     triangles[1].descriptorHeapSelection[0] = 0;
     triangles[1].descriptorHeapSelection[1] = 0;
     triangles[1].descriptorHeapSelection[2] = 1;
-    triangles[1].descriptorHeapCount[0] = 2;
-    triangles[1].descriptorHeapCount[1] = 1;
-    triangles[1].descriptorHeapCount[2] = 1;
+    triangles[1].resourceCount[0] = 2;
+    triangles[1].resourceCount[1] = 1;
+    triangles[1].resourceCount[2] = 1;
     triangles[1].pipelineState = triangles[0].pipelineState;
     triangles[1].rootSignature = triangles[0].rootSignature;
 
@@ -653,7 +728,22 @@ void DoSceneStuff()
     triangles[1].descriptorHeapPointer[1] = CreateDescriptorTable(types2, 1, MAX_FRAMES_IN_FLIGHT, &mainSRVDescriptorHeap);
 
 
-
+    triangles[0].indexBuffer = globalDeviceBufferResource;
+    triangles[1].indexBuffer = globalDeviceBufferResource;
+    triangles[0].vertexBuffer = globalDeviceBufferResource;
+    triangles[1].vertexBuffer = globalDeviceBufferResource;
+    triangles[0].vertexBufferOffset = allocationHandle[vertexOffset].offset;
+    triangles[1].vertexBufferOffset = allocationHandle[vertexOffset].offset;
+    triangles[0].indexBufferOffset = allocationHandle[indexOffset].offset;
+    triangles[1].indexBufferOffset = allocationHandle[indexOffset].offset;
+    triangles[0].vertexSize = sizeof(XMVECTOR);
+    triangles[1].vertexSize = sizeof(XMVECTOR);
+    triangles[0].indexSize = 2;
+    triangles[1].indexSize = 2;
+    triangles[0].indexBufferSize = sizeof(BoxIndices);
+    triangles[1].indexBufferSize = sizeof(BoxIndices);
+    triangles[0].vertexBufferSize = sizeof(BoxVerts);
+    triangles[1].vertexBufferSize = sizeof(BoxVerts);
 
 
 }
@@ -773,6 +863,22 @@ int main()
     if (g_FenceEvent == INVALID_HANDLE_VALUE)
         goto end;
 
+
+    t_Fence = CreateFence(deviceHandle);
+    if (!t_Fence)
+        goto end;
+
+    t_FenceEvent = CreateEventHandle();
+    if (t_FenceEvent == INVALID_HANDLE_VALUE)
+        goto end;
+
+    transferCommandBuffer = CreateCommandList(
+        deviceHandle,
+        transferCommandPool,
+        D3D12_COMMAND_LIST_TYPE_DIRECT
+    );
+
+
     world[0] = XMMatrixIdentity();
     world[1] = XMMatrixTranslation(2.0, 2.0, 0.0);
 
@@ -793,7 +899,9 @@ int main()
     }
 
 
-    
+    transferCommandPool->Reset();
+
+    transferCommandBuffer->Reset(transferCommandPool, NULL);
 
     DoSceneStuff();   
 
@@ -868,7 +976,20 @@ ID3D12PipelineState* CreatePipelineStateObject(ID3D12Device2* device, ID3D12Root
         }
     }
 
-    desc.InputLayout = { nullptr, 0 };
+    D3D12_INPUT_ELEMENT_DESC inputLayout[] =
+    {
+        {
+            "POSITION",                 // SemanticName
+            0,                          // SemanticIndex
+            DXGI_FORMAT_R32G32B32A32_FLOAT, // float4
+            0,                          // InputSlot
+            0,                          // AlignedByteOffset
+            D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,
+            0
+        }
+    };
+
+    desc.InputLayout = { inputLayout, 1 };
     desc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
     desc.SampleMask = UINT_MAX;
     desc.DepthStencilState = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
@@ -883,6 +1004,8 @@ ID3D12PipelineState* CreatePipelineStateObject(ID3D12Device2* device, ID3D12Root
     desc.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
     desc.SampleDesc.Count = 1;
     desc.SampleDesc.Quality = 0;
+    desc.RasterizerState.CullMode = D3D12_CULL_MODE_FRONT;
+    desc.RasterizerState.FrontCounterClockwise = FALSE;
 
     hr = device->CreateGraphicsPipelineState(
         &desc,
@@ -902,6 +1025,9 @@ void ReleaseD3D12Resources()
 
     if (transferCommandPool)
         transferCommandPool->Release();
+
+    if (transferCommandBuffer)
+        transferCommandBuffer->Release();
 
     if (triangles[0].rootSignature)
         triangles[0].rootSignature->Release();
@@ -1020,6 +1146,20 @@ void ReleaseD3D12Resources()
         g_FenceEvent = INVALID_HANDLE_VALUE;
     }
 
+    // --- Fence ---
+    if (t_Fence)
+    {
+        t_Fence->Release();
+        t_Fence = nullptr;
+    }
+
+    // --- Fence event ---
+    if (t_FenceEvent != INVALID_HANDLE_VALUE)
+    {
+        CloseHandle(t_FenceEvent);
+        t_FenceEvent = INVALID_HANDLE_VALUE;
+    }
+
     // --- Swapchain ---
     if (swapChain)
     {
@@ -1087,11 +1227,11 @@ ID3D12Device2* CreateDevice(IDXGIAdapter4* adapter, bool debug)
 
             NewFilter.DenyList.pSeverityList = Severities;
 
-            /*
+            
             if (FAILED(infoQueue->PushStorageFilter(&NewFilter))) {
                 printf("Cannot set debug levels when requested");
             }
-            */
+            
             infoQueue->Release();
         }
     }
@@ -1505,6 +1645,29 @@ int Render()
 
     auto graphicCommandBuffer = graphicCommandBuffers[currentFrame];
 
+    if (transferCommandsUploaded)
+    {
+        transferCommandBuffer->Close();
+
+        ID3D12CommandList* const commandLists[] = {
+            transferCommandBuffer
+        };
+
+        queueHandle->ExecuteCommandLists(_countof(commandLists), commandLists);
+
+        uint64_t fenceValue = 0;
+
+        uint64_t fencesign = Signal(queueHandle, t_Fence, fenceValue);
+
+        Flush(queueHandle, t_Fence, fenceValue, t_FenceEvent);
+
+        transferCommandPool->Reset();
+
+        transferCommandBuffer->Reset(transferCommandPool, NULL);
+
+        transferCommandsUploaded = 0;
+    }
+
     commandAllocator->Reset();
 
     graphicCommandBuffer->Reset(commandAllocator, nullptr);
@@ -1545,35 +1708,61 @@ int Render()
     graphicCommandBuffer->OMSetRenderTargets(1, &rtvHandle, FALSE, &dsvHandle);
 
 
-    for(int i = 0; i<2; i++)
+    for (int i = 0; i < 2; i++)
     {
         graphicCommandBuffer->SetGraphicsRootSignature(triangles[i].rootSignature);
 
-  
-
-        graphicCommandBuffer->SetDescriptorHeaps(2, triangles[i].descriptorHeap);
+        graphicCommandBuffer->SetDescriptorHeaps(triangles[i].heapsCount, triangles[i].descriptorHeap);
 
         graphicCommandBuffer->SetPipelineState(triangles[i].pipelineState);
         graphicCommandBuffer->IASetPrimitiveTopology(triangles[i].topology);
 
-        
 
-        
+
+
         for (int j = 0; j < triangles[i].descriptorTableCount; j++)
         {
             int heapindex = triangles[i].descriptorHeapSelection[j];
             int step = (heapindex == 0 ? mainSRVDescriptorHeap.descriptorHeapHandleSize : mainSVDescriptorHeap.descriptorHeapHandleSize);
-            CD3DX12_GPU_DESCRIPTOR_HANDLE handle = CD3DX12_GPU_DESCRIPTOR_HANDLE(triangles[i].descriptorHeap[heapindex]->GetGPUDescriptorHandleForHeapStart(), triangles[i].descriptorHeapPointer[j] + (currentFrame * triangles[i].descriptorHeapCount[j]), step);
+            CD3DX12_GPU_DESCRIPTOR_HANDLE handle = CD3DX12_GPU_DESCRIPTOR_HANDLE(triangles[i].descriptorHeap[heapindex]->GetGPUDescriptorHandleForHeapStart(), triangles[i].descriptorHeapPointer[j] + (currentFrame * triangles[i].resourceCount[j]), step);
             graphicCommandBuffer->SetGraphicsRootDescriptorTable(triangles[i].descriptorRootParameterIndices[j], handle);
         }
+
+
+        if (triangles[i].vertexBuffer != NULL)
+        {
+            D3D12_VERTEX_BUFFER_VIEW vertexView{};
+
+            vertexView.BufferLocation = triangles[i].vertexBuffer->GetGPUVirtualAddress() + triangles[i].vertexBufferOffset;
+            vertexView.SizeInBytes = triangles[i].vertexBufferSize;
+            vertexView.StrideInBytes = triangles[i].vertexSize;
+
+            graphicCommandBuffer->IASetVertexBuffers(0, 1, &vertexView);
+        }
+
+        if (triangles[i].indexBuffer != NULL)
+        {
         
-        
+            D3D12_INDEX_BUFFER_VIEW indexView{};
+
+            indexView.BufferLocation = triangles[i].indexBuffer->GetGPUVirtualAddress() + triangles[i].indexBufferOffset;
+            indexView.SizeInBytes = triangles[i].indexBufferSize;
+            indexView.Format = (triangles[i].indexSize == 2) ? DXGI_FORMAT_R16_UINT : DXGI_FORMAT_R32_UINT;
+
+            graphicCommandBuffer->IASetIndexBuffer(&indexView);
+
+            graphicCommandBuffer->DrawIndexedInstanced(triangles[i].indexCount, triangles[i].instanceCount, 0, 0, 0);
+
+        }
+        else 
+        {
+            graphicCommandBuffer->DrawInstanced(triangles[i].vertexCount, triangles[i].instanceCount, 0, 0);
+        }
 
         
 
-        
         //graphicCommandBuffer->SetGraphicsRoot32BitConstants(0, 32, &cam, 0);
-        graphicCommandBuffer->DrawInstanced(triangles[i].vertexCount, triangles[i].instanceCount, 0, 0);
+        
     }
 
 
@@ -1730,17 +1919,19 @@ ID3D12Resource* CreateImageResource(ID3D12Device2* device, UINT width, UINT heig
     return imageHandle;
 }
 
-void WriteToDeviceLocalMemory(int allocationIndex, void* data, size_t size, size_t offset, int copies, D3D12_RESOURCE_STATES destinationStage)
+void WriteToDeviceLocalMemory(int allocationIndex, void* data, size_t size, size_t offset, int copies, D3D12_RESOURCE_STATES srcStage, D3D12_RESOURCE_STATES destinationStage)
 {
      void* mappedData = nullptr;
  
     Allocation* alloc = &allocationHandle[allocationIndex];
 
-    ID3D12Resource* stagingBuffer = stagingBuffers[0];
+    ID3D12Resource* stagingBuffer = stagingBuffers[currentFrame];
 
     stagingBuffer->Map(0, nullptr, &mappedData);
 
-    uintptr_t cdata = (uintptr_t)(mappedData);
+    uintptr_t cdata = (uintptr_t)(mappedData) + stagingbufferoffsets[currentFrame];
+
+    size_t stageOffset = stagingbufferoffsets[currentFrame];
 
     size_t stride = (alloc->requestedsize + alloc->alignment - 1) & ~(alloc->alignment - 1);
 
@@ -1753,35 +1944,23 @@ void WriteToDeviceLocalMemory(int allocationIndex, void* data, size_t size, size
 
     stagingBuffer->Unmap(0, nullptr);
 
+    stagingbufferoffsets[currentFrame] += (stride * copies);
 
-    transferCommandPool->Reset();
-
+   
     
 
-   ID3D12GraphicsCommandList* transferCmdBuffer = CreateCommandList(
-        deviceHandle,
-        transferCommandPool,
-        D3D12_COMMAND_LIST_TYPE_DIRECT
-    );
 
-   ID3D12CommandQueue* lqueueHandle = CreateCommandQueue(deviceHandle, D3D12_COMMAND_LIST_TYPE_DIRECT);
-
-   ID3D12Fence* fence = CreateFence(deviceHandle);
-
-   HANDLE fenceEvent = CreateEventHandle();
-
-   transferCmdBuffer->Reset(transferCommandPool, nullptr);
 
    D3D12_RESOURCE_BARRIER preBarrier = {};
    preBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
    preBarrier.Transition.pResource = alloc->bufferHandle;
-   preBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COMMON;
+   preBarrier.Transition.StateBefore = srcStage;
    preBarrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
    preBarrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
 
-   transferCmdBuffer->ResourceBarrier(1, &preBarrier);
+   transferCommandBuffer->ResourceBarrier(1, &preBarrier);
 
-   transferCmdBuffer->CopyBufferRegion(alloc->bufferHandle, alloc->offset + offset, stagingBuffer, 0, stride * copies);
+   transferCommandBuffer->CopyBufferRegion(alloc->bufferHandle, alloc->offset + offset, stagingBuffer, stageOffset, stride * copies);
 
    D3D12_RESOURCE_BARRIER postBarrier = {};
    postBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -1790,26 +1969,9 @@ void WriteToDeviceLocalMemory(int allocationIndex, void* data, size_t size, size
    postBarrier.Transition.StateAfter = destinationStage;
    postBarrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
 
-   transferCmdBuffer->ResourceBarrier(1, &postBarrier);
+   transferCommandBuffer->ResourceBarrier(1, &postBarrier);
 
-   transferCmdBuffer->Close();
-
-   ID3D12CommandList* const commandLists[] = {
-       transferCmdBuffer
-   };
-
-   lqueueHandle->ExecuteCommandLists(_countof(commandLists), commandLists);
-   
-   uint64_t fenceValue = 0;
-
-   uint64_t fencesign = Signal(lqueueHandle, fence, fenceValue);
-
-   Flush(lqueueHandle, fence, fenceValue, fenceEvent);
-
-   transferCmdBuffer->Release();
-   lqueueHandle->Release();
-   fence->Release();
-   CloseHandle(fenceEvent);
+   transferCommandsUploaded++;
 }
 
 void WriteToImageDeviceLocalMemory(ID3D12Resource* imageHandle, char* data, UINT width, UINT height, UINT componentCount, UINT totalImageSize, DXGI_FORMAT format, UINT mipLevels, UINT layers)
@@ -1817,11 +1979,11 @@ void WriteToImageDeviceLocalMemory(ID3D12Resource* imageHandle, char* data, UINT
     void* mappedData = nullptr;
 
 
-    ID3D12Resource* stagingBuffer = stagingBuffers[0];
+    ID3D12Resource* stagingBuffer = stagingBuffers[currentFrame];
 
     stagingBuffer->Map(0, nullptr, &mappedData);
 
-    uintptr_t cdata = (uintptr_t)(mappedData);
+    uintptr_t cdata = (uintptr_t)(mappedData) + stagingbufferoffsets[currentFrame];
 
     size_t stride = ((width * componentCount) + (255)) & ~255;
 
@@ -1834,24 +1996,8 @@ void WriteToImageDeviceLocalMemory(ID3D12Resource* imageHandle, char* data, UINT
 
     stagingBuffer->Unmap(0, nullptr);
 
-
-    transferCommandPool->Reset();
-
-
-
-    ID3D12GraphicsCommandList* transferCmdBuffer = CreateCommandList(
-        deviceHandle,
-        transferCommandPool,
-        D3D12_COMMAND_LIST_TYPE_DIRECT
-    );
-
-    ID3D12CommandQueue* lqueueHandle = CreateCommandQueue(deviceHandle, D3D12_COMMAND_LIST_TYPE_DIRECT);
-
-    ID3D12Fence* fence = CreateFence(deviceHandle);
-
-    HANDLE fenceEvent = CreateEventHandle();
-
-    transferCmdBuffer->Reset(transferCommandPool, nullptr);
+    stagingbufferoffsets[currentFrame] += (stride * height);
+    
 
     D3D12_RESOURCE_BARRIER preBarrier = {};
     preBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -1860,7 +2006,7 @@ void WriteToImageDeviceLocalMemory(ID3D12Resource* imageHandle, char* data, UINT
     preBarrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
     preBarrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
 
-    transferCmdBuffer->ResourceBarrier(1, &preBarrier);
+    transferCommandBuffer->ResourceBarrier(1, &preBarrier);
 
     D3D12_TEXTURE_COPY_LOCATION dest{}, src{};
 
@@ -1878,7 +2024,7 @@ void WriteToImageDeviceLocalMemory(ID3D12Resource* imageHandle, char* data, UINT
     dest.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
     dest.SubresourceIndex = 0;
 
-    transferCmdBuffer->CopyTextureRegion(&dest, 0, 0, 0, &src, NULL);
+    transferCommandBuffer->CopyTextureRegion(&dest, 0, 0, 0, &src, NULL);
 
     D3D12_RESOURCE_BARRIER postBarrier = {};
     postBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -1887,26 +2033,9 @@ void WriteToImageDeviceLocalMemory(ID3D12Resource* imageHandle, char* data, UINT
     postBarrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
     postBarrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
 
-    transferCmdBuffer->ResourceBarrier(1, &postBarrier);
+    transferCommandBuffer->ResourceBarrier(1, &postBarrier);
 
-    transferCmdBuffer->Close();
-
-    ID3D12CommandList* const commandLists[] = {
-        transferCmdBuffer
-    };
-
-    lqueueHandle->ExecuteCommandLists(_countof(commandLists), commandLists);
-
-    uint64_t fenceValue = 0;
-
-    uint64_t fencesign = Signal(lqueueHandle, fence, fenceValue);
-
-    Flush(lqueueHandle, fence, fenceValue, fenceEvent);
-
-    transferCmdBuffer->Release();
-    lqueueHandle->Release();
-    fence->Release();
-    CloseHandle(fenceEvent);
+    transferCommandsUploaded++;
 }
 
 void CreateImageSampler(ID3D12Device2* device, DescriptorHeap* samplerDescriptorHeap)
@@ -2120,7 +2249,7 @@ void CreateCBVDescriptorHandle(ID3D12Device2* device, ID3D12Resource* bufferHand
 
 }
 
-ID3D12RootSignature* CreateRootSignature(ID3D12Device2* device, CD3DX12_ROOT_PARAMETER* rootParameters, UINT parameterCount)
+ID3D12RootSignature* CreateRootSignature(ID3D12Device2* device, CD3DX12_ROOT_PARAMETER* rootParameters, UINT parameterCount, D3D12_ROOT_SIGNATURE_FLAGS flags)
 {
     ID3D12RootSignature* rootSignature;
 
@@ -2128,7 +2257,7 @@ ID3D12RootSignature* CreateRootSignature(ID3D12Device2* device, CD3DX12_ROOT_PAR
 
     CD3DX12_ROOT_SIGNATURE_DESC rsigDesc = {};
 
-    rsigDesc.Init(parameterCount, rootParameters, 0, nullptr);
+    rsigDesc.Init(parameterCount, rootParameters, 0, nullptr, flags);
 
 
     D3D12SerializeRootSignature(&rsigDesc, D3D_ROOT_SIGNATURE_VERSION_1, &rootSigDescriptorLayout, nullptr);
@@ -2168,7 +2297,7 @@ ID3D12RootSignature* CreateGenericRootSignature()
     rootParameters[1].InitAsDescriptorTable(2, arr + 1,  D3D12_SHADER_VISIBILITY_ALL);
     rootParameters[2].InitAsDescriptorTable(1, arr + 3, D3D12_SHADER_VISIBILITY_PIXEL);
 
-    ID3D12RootSignature* rootSignature = CreateRootSignature(deviceHandle, rootParameters, 3);
+    ID3D12RootSignature* rootSignature = CreateRootSignature(deviceHandle, rootParameters, 3, D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
     
     return rootSignature;
 }
