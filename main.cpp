@@ -304,12 +304,12 @@ ID3D12Resource* swapChainImages[MAX_FRAMES_IN_FLIGHT];
 
 ID3D12Resource* swapChainDepthImages[MAX_FRAMES_IN_FLIGHT];
 
-ID3D12GraphicsCommandList* graphicCommandBuffers[MAX_FRAMES_IN_FLIGHT];
+ID3D12GraphicsCommandList7* graphicCommandBuffers[MAX_FRAMES_IN_FLIGHT];
 
 ID3D12CommandAllocator* graphicCommandPools[MAX_FRAMES_IN_FLIGHT];
 
 ID3D12CommandAllocator* transferCommandPool;
-ID3D12GraphicsCommandList* transferCommandBuffer;
+ID3D12GraphicsCommandList7* transferCommandBuffer;
 int transferCommandsUploaded = 0;
 
 ID3D12DescriptorHeap* globalRTVDescriptorHeap;
@@ -387,7 +387,7 @@ void WaitForFenceValue(ID3D12Fence* fence, uint64_t fenceValue, HANDLE fenceEven
 uint64_t Signal(ID3D12CommandQueue* commandQueue, ID3D12Fence* fence, uint64_t& fenceValue);
 ID3D12Fence* CreateFence(ID3D12Device2* device);
 HANDLE CreateEventHandle();
-ID3D12GraphicsCommandList* CreateCommandList(ID3D12Device2* device,
+ID3D12GraphicsCommandList7* CreateCommandList(ID3D12Device2* device,
     ID3D12CommandAllocator* commandAllocator, D3D12_COMMAND_LIST_TYPE type);
 ID3D12CommandAllocator* CreateCommandAllocator(ID3D12Device2* device, D3D12_COMMAND_LIST_TYPE type);
 int CreateRenderTargetView(ID3D12Device2* device, IDXGISwapChain4* swapChain, ID3D12DescriptorHeap* descriptorHeap, ID3D12Resource** outBuffers, UINT rtvDescriptorSize);
@@ -398,11 +398,11 @@ ID3DBlob* CreateShaderBlob(const char* shaderfile);
 ID3D12Resource* CreateHostBuffer(ID3D12Device2* device, UINT size, D3D12_RESOURCE_FLAGS flags);
 ID3D12Resource* CreateDeviceLocalBuffer(ID3D12Device2* device, UINT size, D3D12_RESOURCE_FLAGS flags);
 void WriteToHostMemory(int allocationIndex, void* data, size_t size, size_t offset, int copies);
-void WriteToDeviceLocalMemory(int allocationIndex, void* data, size_t size, size_t offset, int copies, D3D12_RESOURCE_STATES srcStage, D3D12_RESOURCE_STATES destinationStage);
+void WriteToDeviceLocalMemory(int allocationIndex, void* data, size_t size, size_t offset, int copies);
 
 ID3D12Resource* CreateImageResource(ID3D12Device2* device, UINT width, UINT height, UINT depth, UINT mips, D3D12_RESOURCE_FLAGS flags, DXGI_FORMAT format, D3D12_RESOURCE_DIMENSION dimension);
 void WriteToImageDeviceLocalMemory(ID3D12Resource* imageHandle, char* data, UINT width, UINT height, UINT componentCount, UINT totalImageSize, DXGI_FORMAT format, UINT mipLevels, UINT layers);
-
+void TransitionBufferBarrier(ID3D12GraphicsCommandList7* cmdBuffer, ID3D12Resource* resource, D3D12_BARRIER_SYNC srcSync, D3D12_BARRIER_ACCESS srcAccess, D3D12_BARRIER_SYNC dstSync, D3D12_BARRIER_ACCESS dstAccess);
 
 struct Camera
 {
@@ -638,15 +638,19 @@ void DoSceneStuff()
     int vertexOffset = AllocFromDeviceBuffer(sizeof(BoxVerts), 16, 1);
     int indexOffset = AllocFromDeviceBuffer(sizeof(BoxIndices), 16, 1);
 
-    WriteToDeviceLocalMemory(vertexOffset, BoxVerts, sizeof(BoxVerts), 0, 1, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+    TransitionBufferBarrier(transferCommandBuffer, globalDeviceBufferResource, D3D12_BARRIER_SYNC_NONE, D3D12_BARRIER_ACCESS_NO_ACCESS, D3D12_BARRIER_SYNC_COPY, D3D12_BARRIER_ACCESS_COPY_DEST);
 
-    WriteToDeviceLocalMemory(indexOffset, BoxIndices, sizeof(BoxIndices), 0, 1, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER, D3D12_RESOURCE_STATE_INDEX_BUFFER);
+    WriteToDeviceLocalMemory(vertexOffset, BoxVerts, sizeof(BoxVerts), 0, 1);
+
+    WriteToDeviceLocalMemory(indexOffset, BoxIndices, sizeof(BoxIndices), 0, 1);
 
     WriteToHostMemory(cameraData, &cam, sizeof(Camera), 0, MAX_FRAMES_IN_FLIGHT);
 
-    WriteToDeviceLocalMemory(world1Data, world, 64, 0, MAX_FRAMES_IN_FLIGHT, D3D12_RESOURCE_STATE_INDEX_BUFFER, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+    WriteToDeviceLocalMemory(world1Data, world, 64, 0, MAX_FRAMES_IN_FLIGHT);
 
-    WriteToDeviceLocalMemory(world2Data, &world[1], 64, 0, MAX_FRAMES_IN_FLIGHT, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+    WriteToDeviceLocalMemory(world2Data, &world[1], 64, 0, MAX_FRAMES_IN_FLIGHT);
+
+    TransitionBufferBarrier(transferCommandBuffer, globalDeviceBufferResource, D3D12_BARRIER_SYNC_COPY, D3D12_BARRIER_ACCESS_COPY_DEST, D3D12_BARRIER_SYNC_DRAW | D3D12_BARRIER_SYNC_INDEX_INPUT, D3D12_BARRIER_ACCESS_VERTEX_BUFFER | D3D12_BARRIER_ACCESS_CONSTANT_BUFFER | D3D12_BARRIER_ACCESS_INDEX_BUFFER);
 
     bgraImageMemoryPool = CreateImageResource(deviceHandle, details.width, details.height, 1, details.miplevels, D3D12_RESOURCE_FLAG_NONE, details.type, D3D12_RESOURCE_DIMENSION_TEXTURE2D);
 
@@ -1235,6 +1239,15 @@ ID3D12Device2* CreateDevice(IDXGIAdapter4* adapter, bool debug)
             infoQueue->Release();
         }
     }
+
+    D3D12_FEATURE_DATA_D3D12_OPTIONS12 opts12{};
+    d3d12Device2->CheckFeatureSupport(
+        D3D12_FEATURE_D3D12_OPTIONS12,
+        &opts12,
+        sizeof(opts12)
+    );
+
+    assert(opts12.EnhancedBarriersSupported);
     
 
     return d3d12Device2;
@@ -1555,7 +1568,7 @@ ID3D12CommandAllocator* CreateCommandAllocator(ID3D12Device2* device, D3D12_COMM
 
 
 
-ID3D12GraphicsCommandList* CreateCommandList(ID3D12Device2* device,
+ID3D12GraphicsCommandList7* CreateCommandList(ID3D12Device2* device,
     ID3D12CommandAllocator* commandAllocator, D3D12_COMMAND_LIST_TYPE type)
 
 {
@@ -1574,7 +1587,18 @@ ID3D12GraphicsCommandList* CreateCommandList(ID3D12Device2* device,
         return NULL;
     }
 
-    return commandList;
+
+    ID3D12GraphicsCommandList7* commandList7 = NULL;
+
+    if (FAILED(commandList->QueryInterface(IID_PPV_ARGS(&commandList7))))
+    {
+        printf("Failed to make newest interface\n");
+        commandList->Release();
+        return NULL;
+    }
+
+
+    return commandList7;
 }
 
 
@@ -1678,10 +1702,31 @@ int Render()
 
     
     {
-        CD3DX12_RESOURCE_BARRIER barrier = CD3DX12_RESOURCE_BARRIER::Transition(backBuffer, D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
 
-        graphicCommandBuffer->ResourceBarrier(1, &barrier);
+        D3D12_TEXTURE_BARRIER barrierInfo{};
+        barrierInfo.Flags = D3D12_TEXTURE_BARRIER_FLAG_NONE;
+        barrierInfo.pResource = backBuffer;
+        barrierInfo.Subresources.FirstArraySlice = 0;
+        barrierInfo.Subresources.IndexOrFirstMipLevel = 0;
+        barrierInfo.Subresources.FirstPlane = 0;
+        barrierInfo.Subresources.NumArraySlices = 1;
+        barrierInfo.Subresources.NumMipLevels = 1;
+        barrierInfo.Subresources.NumPlanes = 1;
+        barrierInfo.SyncBefore = D3D12_BARRIER_SYNC_NONE;
+        barrierInfo.SyncAfter = D3D12_BARRIER_SYNC_RENDER_TARGET;
+        barrierInfo.AccessBefore = D3D12_BARRIER_ACCESS_NO_ACCESS;
+            
+        barrierInfo.AccessAfter = D3D12_BARRIER_ACCESS_RENDER_TARGET;
+        barrierInfo.LayoutBefore = D3D12_BARRIER_LAYOUT_PRESENT;
+        barrierInfo.LayoutAfter = D3D12_BARRIER_LAYOUT_RENDER_TARGET;
 
+     
+        D3D12_BARRIER_GROUP barrierGroup = {};
+        barrierGroup.Type = D3D12_BARRIER_TYPE_TEXTURE;
+        barrierGroup.NumBarriers = 1;
+        barrierGroup.pTextureBarriers = &barrierInfo;
+
+        graphicCommandBuffer->Barrier(1, &barrierGroup);
         const FLOAT clearColor[4] = {0.0f, 0.0f, 0.0f, 1.0f};
 
         graphicCommandBuffer->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
@@ -1768,16 +1813,32 @@ int Render()
 
 
     {
-        CD3DX12_RESOURCE_BARRIER barrier = CD3DX12_RESOURCE_BARRIER::Transition(
+      
 
+            D3D12_TEXTURE_BARRIER barrierInfo{};
+            barrierInfo.Flags = D3D12_TEXTURE_BARRIER_FLAG_NONE;
+            barrierInfo.pResource = backBuffer;
+            barrierInfo.Subresources.FirstArraySlice = 0;
+            barrierInfo.Subresources.IndexOrFirstMipLevel = 0;
+            barrierInfo.Subresources.FirstPlane = 0;
+            barrierInfo.Subresources.NumArraySlices = 1;
+            barrierInfo.Subresources.NumMipLevels = 1;
+            barrierInfo.Subresources.NumPlanes = 1;
+            barrierInfo.SyncBefore = D3D12_BARRIER_SYNC_RENDER_TARGET;
+            barrierInfo.SyncAfter = D3D12_BARRIER_SYNC_NONE;
+            barrierInfo.AccessBefore = D3D12_BARRIER_ACCESS_RENDER_TARGET;
+            barrierInfo.AccessAfter = D3D12_BARRIER_ACCESS_NO_ACCESS;
+            barrierInfo.LayoutBefore =  D3D12_BARRIER_LAYOUT_RENDER_TARGET;
+            barrierInfo.LayoutAfter = D3D12_BARRIER_LAYOUT_PRESENT;
 
-            backBuffer,
+    
+            D3D12_BARRIER_GROUP barrierGroup = {};
+            barrierGroup.Type = D3D12_BARRIER_TYPE_TEXTURE;
+            barrierGroup.NumBarriers = 1;
+            barrierGroup.pTextureBarriers = &barrierInfo;
 
+            graphicCommandBuffer->Barrier(1, &barrierGroup);
 
-            D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
-
-
-        graphicCommandBuffer->ResourceBarrier(1, &barrier);
     }
 
     if (FAILED(graphicCommandBuffer->Close()))
@@ -1919,59 +1980,53 @@ ID3D12Resource* CreateImageResource(ID3D12Device2* device, UINT width, UINT heig
     return imageHandle;
 }
 
-void WriteToDeviceLocalMemory(int allocationIndex, void* data, size_t size, size_t offset, int copies, D3D12_RESOURCE_STATES srcStage, D3D12_RESOURCE_STATES destinationStage)
+void TransitionBufferBarrier(ID3D12GraphicsCommandList7* cmdBuffer, ID3D12Resource* resource, D3D12_BARRIER_SYNC srcSync, D3D12_BARRIER_ACCESS srcAccess,  D3D12_BARRIER_SYNC dstSync, D3D12_BARRIER_ACCESS dstAccess)
 {
-     void* mappedData = nullptr;
- 
-    Allocation* alloc = &allocationHandle[allocationIndex];
+    D3D12_BUFFER_BARRIER barrierInfo{};
+    barrierInfo.pResource = resource;
+    barrierInfo.SyncBefore = srcSync;
+    barrierInfo.SyncAfter = dstSync;
+    barrierInfo.AccessBefore = srcAccess;
+    barrierInfo.AccessAfter = dstAccess;
+    barrierInfo.Offset = 0;
+    barrierInfo.Size = UINT64_MAX;
 
-    ID3D12Resource* stagingBuffer = stagingBuffers[currentFrame];
+    D3D12_BARRIER_GROUP barrierGroup = {};
+    barrierGroup.Type = D3D12_BARRIER_TYPE_BUFFER;
+    barrierGroup.NumBarriers = 1;
+    barrierGroup.pBufferBarriers = &barrierInfo;
 
-    stagingBuffer->Map(0, nullptr, &mappedData);
+    cmdBuffer->Barrier(1, &barrierGroup);
+}
 
-    uintptr_t cdata = (uintptr_t)(mappedData) + stagingbufferoffsets[currentFrame];
+void WriteToDeviceLocalMemory(int allocationIndex, void* data, size_t size, size_t offset, int copies)
+{
+	void* mappedData = nullptr;
 
-    size_t stageOffset = stagingbufferoffsets[currentFrame];
+	Allocation* alloc = &allocationHandle[allocationIndex];
 
-    size_t stride = (alloc->requestedsize + alloc->alignment - 1) & ~(alloc->alignment - 1);
+	ID3D12Resource* stagingBuffer = stagingBuffers[currentFrame];
 
-    for (int i = 0; i < copies; i++)
-    {
-        memcpy((void*)(cdata), data, size);
-        cdata += stride;
-    }
+	stagingBuffer->Map(0, nullptr, &mappedData);
 
+	uintptr_t cdata = (uintptr_t)(mappedData)+stagingbufferoffsets[currentFrame];
 
-    stagingBuffer->Unmap(0, nullptr);
+	size_t stageOffset = stagingbufferoffsets[currentFrame];
 
-    stagingbufferoffsets[currentFrame] += (stride * copies);
+	size_t stride = (alloc->requestedsize + alloc->alignment - 1) & ~(alloc->alignment - 1);
 
-   
-    
+	for (int i = 0; i < copies; i++)
+	{
+		memcpy((void*)(cdata), data, size);
+		cdata += stride;
+	}
+	stagingBuffer->Unmap(0, nullptr);
 
+	stagingbufferoffsets[currentFrame] += (stride * copies);
 
+	transferCommandBuffer->CopyBufferRegion(alloc->bufferHandle, alloc->offset + offset, stagingBuffer, stageOffset, stride * copies);
 
-   D3D12_RESOURCE_BARRIER preBarrier = {};
-   preBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-   preBarrier.Transition.pResource = alloc->bufferHandle;
-   preBarrier.Transition.StateBefore = srcStage;
-   preBarrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
-   preBarrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-
-   transferCommandBuffer->ResourceBarrier(1, &preBarrier);
-
-   transferCommandBuffer->CopyBufferRegion(alloc->bufferHandle, alloc->offset + offset, stagingBuffer, stageOffset, stride * copies);
-
-   D3D12_RESOURCE_BARRIER postBarrier = {};
-   postBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-   postBarrier.Transition.pResource = alloc->bufferHandle;
-   postBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
-   postBarrier.Transition.StateAfter = destinationStage;
-   postBarrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-
-   transferCommandBuffer->ResourceBarrier(1, &postBarrier);
-
-   transferCommandsUploaded++;
+	transferCommandsUploaded++;
 }
 
 void WriteToImageDeviceLocalMemory(ID3D12Resource* imageHandle, char* data, UINT width, UINT height, UINT componentCount, UINT totalImageSize, DXGI_FORMAT format, UINT mipLevels, UINT layers)
@@ -2006,7 +2061,32 @@ void WriteToImageDeviceLocalMemory(ID3D12Resource* imageHandle, char* data, UINT
     preBarrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
     preBarrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
 
-    transferCommandBuffer->ResourceBarrier(1, &preBarrier);
+    //transferCommandBuffer->ResourceBarrier(1, &preBarrier);
+
+
+    D3D12_TEXTURE_BARRIER barrierInfo{};
+    barrierInfo.Flags = D3D12_TEXTURE_BARRIER_FLAG_NONE;
+    barrierInfo.pResource = imageHandle;
+    barrierInfo.Subresources.FirstArraySlice = 0;
+    barrierInfo.Subresources.IndexOrFirstMipLevel = 0;
+    barrierInfo.Subresources.FirstPlane = 0;
+    barrierInfo.Subresources.NumArraySlices = layers;
+    barrierInfo.Subresources.NumMipLevels = mipLevels;
+    barrierInfo.Subresources.NumPlanes = 1;
+    barrierInfo.SyncBefore = D3D12_BARRIER_SYNC_NONE;
+    barrierInfo.SyncAfter = D3D12_BARRIER_SYNC_COPY;
+    barrierInfo.AccessBefore = D3D12_BARRIER_ACCESS_NO_ACCESS;
+    barrierInfo.AccessAfter = D3D12_BARRIER_ACCESS_COPY_DEST;
+    barrierInfo.LayoutBefore = D3D12_BARRIER_LAYOUT_COMMON;
+    barrierInfo.LayoutAfter = D3D12_BARRIER_LAYOUT_COPY_DEST;
+
+
+    D3D12_BARRIER_GROUP barrierGroup = {};
+    barrierGroup.Type = D3D12_BARRIER_TYPE_TEXTURE;
+    barrierGroup.NumBarriers = 1;
+    barrierGroup.pTextureBarriers = &barrierInfo;
+
+    transferCommandBuffer->Barrier(1, &barrierGroup);
 
     D3D12_TEXTURE_COPY_LOCATION dest{}, src{};
 
@@ -2033,7 +2113,24 @@ void WriteToImageDeviceLocalMemory(ID3D12Resource* imageHandle, char* data, UINT
     postBarrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
     postBarrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
 
-    transferCommandBuffer->ResourceBarrier(1, &postBarrier);
+    //transferCommandBuffer->ResourceBarrier(1, &postBarrier);
+
+    barrierInfo.Flags = D3D12_TEXTURE_BARRIER_FLAG_NONE;
+    barrierInfo.pResource = imageHandle;
+    barrierInfo.Subresources.FirstArraySlice = 0;
+    barrierInfo.Subresources.IndexOrFirstMipLevel = 0;
+    barrierInfo.Subresources.FirstPlane = 0;
+    barrierInfo.Subresources.NumArraySlices = layers;
+    barrierInfo.Subresources.NumMipLevels = mipLevels;
+    barrierInfo.Subresources.NumPlanes = 1;
+    barrierInfo.SyncBefore = D3D12_BARRIER_SYNC_COPY;
+    barrierInfo.SyncAfter = D3D12_BARRIER_SYNC_PIXEL_SHADING;
+    barrierInfo.AccessBefore = D3D12_BARRIER_ACCESS_COPY_DEST;
+    barrierInfo.AccessAfter = D3D12_BARRIER_ACCESS_SHADER_RESOURCE;
+    barrierInfo.LayoutBefore = D3D12_BARRIER_LAYOUT_COPY_DEST;
+    barrierInfo.LayoutAfter = D3D12_BARRIER_LAYOUT_SHADER_RESOURCE;
+
+    transferCommandBuffer->Barrier(1, &barrierGroup);
 
     transferCommandsUploaded++;
 }
