@@ -1728,13 +1728,9 @@ int Render()
 
         graphicCommandBuffer->Barrier(1, &barrierGroup);
         const FLOAT clearColor[4] = {0.0f, 0.0f, 0.0f, 1.0f};
-
-        graphicCommandBuffer->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
     }
 
-    {
-        graphicCommandBuffer->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH, 1.0, 0, 0, nullptr);
-    }
+    
 
 
     D3D12_VIEWPORT viewport{};
@@ -1747,11 +1743,41 @@ int Render()
     scissor.right = 800;
     scissor.bottom = 600;
 
+   
+
+    D3D12_RENDER_PASS_DEPTH_STENCIL_DESC depthDesc{};
+    D3D12_RENDER_PASS_RENDER_TARGET_DESC rtvDesc{};
+
+    const FLOAT clearColor[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
+
+
+    rtvDesc.BeginningAccess.Type = D3D12_RENDER_PASS_BEGINNING_ACCESS_TYPE_CLEAR;
+    memcpy(rtvDesc.BeginningAccess.Clear.ClearValue.Color, clearColor, sizeof(FLOAT) * 4);
+    rtvDesc.BeginningAccess.Clear.ClearValue.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    rtvDesc.cpuDescriptor = rtvHandle;
+    rtvDesc.EndingAccess.Type = D3D12_RENDER_PASS_ENDING_ACCESS_TYPE_PRESERVE;
+ /*   rtvDesc.EndingAccess.Resolve.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    rtvDesc.EndingAccess.Resolve.PreserveResolveSource = FALSE;
+    rtvDesc.EndingAccess.Resolve.pSrcResource = backBuffer;
+    rtvDesc.EndingAccess.Resolve.pDstResource = NULL;
+    rtvDesc.EndingAccess.Resolve.SubresourceCount = 0;
+    rtvDesc.EndingAccess.Resolve.ResolveMode = D3D12_RESOLVE_MODE_AVERAGE;
+    rtvDesc.EndingAccess.Resolve.pSubresourceParameters = NULL; */
+
+    depthDesc.cpuDescriptor = dsvHandle;
+    depthDesc.DepthBeginningAccess.Type = D3D12_RENDER_PASS_BEGINNING_ACCESS_TYPE_CLEAR;
+    depthDesc.DepthBeginningAccess.Clear.ClearValue.DepthStencil.Depth = 1.0f;
+    depthDesc.DepthBeginningAccess.Clear.ClearValue.DepthStencil.Stencil = 0;
+    depthDesc.DepthEndingAccess.Type = D3D12_RENDER_PASS_ENDING_ACCESS_TYPE_DISCARD;
+    depthDesc.StencilBeginningAccess.Type = D3D12_RENDER_PASS_BEGINNING_ACCESS_TYPE_NO_ACCESS;
+    depthDesc.StencilEndingAccess.Type = D3D12_RENDER_PASS_ENDING_ACCESS_TYPE_NO_ACCESS;
+
+
+    graphicCommandBuffer->BeginRenderPass(1, &rtvDesc, &depthDesc, D3D12_RENDER_PASS_FLAG_NONE);
+
+
     graphicCommandBuffer->RSSetViewports(1, &viewport);
     graphicCommandBuffer->RSSetScissorRects(1, &scissor);
-
-    graphicCommandBuffer->OMSetRenderTargets(1, &rtvHandle, FALSE, &dsvHandle);
-
 
     for (int i = 0; i < 2; i++)
     {
@@ -1810,7 +1836,7 @@ int Render()
         
     }
 
-
+    graphicCommandBuffer->EndRenderPass();
 
     {
       
