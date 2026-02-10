@@ -23,6 +23,7 @@ SamplerState mySampler : register(s0); // Sampler bound to s0
 struct VSInput
 {
     float4 position : POSITION;
+    float4 texcoords : TEXCOORD0;
     uint vertexID : SV_VertexID;
 };
 
@@ -34,37 +35,22 @@ struct VSOutput
 
 VSOutput VertexMain(VSInput input)
 {
-    
+    /*
     float4x4 identity = float4x4(
         1.0, 0.0, 0.0, 0.0,
         0.0, 1.0, 0.0, 0.0,
         0.0, 0.0, 1.0, 0.0,
         0.0, 0.0, 0.0, 1.0
-    );
+    );*/
 
     VSOutput outv;
-    
    
-    
-    float2 texes[4] =
-    {
-        float2(0.0f, 1.0f),
-        float2(1.0f, 0.0f),
-        float2(0.0f, 0.0f),
-        float2(1.0f, 1.0f)
-    };
-    
-    int indices[6] =
-    {
-        2, 0, 1, 1, 0, 3
-    };
-    
     Cam cam = myBuffer[0];
    
     
     float4x4 viewProj = mul(cam.proj, cam.view);
     outv.position = mul(viewProj, mul(world, input.position));
-    outv.tex = texes[indices[input.vertexID % 6]];
+    outv.tex = input.texcoords.xy;
     return outv;
 }
 
@@ -77,6 +63,5 @@ struct PSInput
 float4 PixelShaderFunction(PSInput input) : SV_Target
 { 
     float2 outc = input.tex;
-    outc.y = 1.0f - outc.y;
     return myTexture.Sample(mySampler, outc);
 }
