@@ -1,7 +1,7 @@
 #define WIN32_LEAN_AND_MEAN
 
 #include <Windows.h>
-
+#include <string>
 
 struct OSFileHandle
 {
@@ -275,6 +275,166 @@ int OSNextFile(OSFileIterator* iterator)
     return 0;
 }
 
+enum class ShaderResourceType
+{
+    SAMPLER2D = 1,
+    STORAGE_BUFFER = 2,
+    UNIFORM_BUFFER = 4,
+    CONSTANT_BUFFER = 8,
+    IMAGESTORE2D = 16,
+    IMAGESTORE3D = 32,
+    SAMPLERBINDLESS = 64,
+    BUFFER_VIEW = 128,
+    SAMPLER3D = 129,
+    SAMPLERCUBE = 130,
+    INVALID_SHADER_RESOURCE = 0x7FFFFFFF
+};
+
+enum class ShaderResourceAction
+{
+    SHADERREAD = 1,
+    SHADERWRITE = 2,
+    SHADERREADWRITE = 3
+};
+
+enum ShaderStageTypeBits
+{
+    VERTEXSHADERSTAGE = 1,
+    FRAGMENTSHADERSTAGE = 2,
+    COMPUTESHADERSTAGE = 4,
+};
+
+typedef int ShaderStageType;
+
+
+struct ShaderSetLayout
+{
+    int vulkanDescLayout;
+    int bindingCount;
+    int resourceStart;
+};
+
+struct ShaderResource
+{
+    ShaderStageType stages;
+    ShaderResourceAction action;
+    ShaderResourceType type;
+    int set;
+    int binding;
+    int arrayCount;
+    int size;
+    int offset;
+};
+
+struct ShaderResourceSet
+{
+    int bindingCount;
+    int layoutHandle;
+    int setCount;
+    int barrierCount;
+};
+
+struct ShaderResourceHeader
+{
+    ShaderResourceType type;
+    ShaderResourceAction action;
+    int binding;
+    int arrayCount;
+};
+
+struct ShaderMap
+{
+    ShaderStageType type;
+    int shaderReference;
+    int GetMapSize() const;
+};
+
+struct ShaderGraph
+{
+    int shaderMapCount;
+    int resourceSetCount;
+    int resourceCount;
+
+    uintptr_t GetSet(int setIndex);
+
+    uintptr_t GetResource(int resourceIndex);
+
+    uintptr_t GetMap(int mapIndex);
+
+    int GetGraphSize() const;
+};
+
+struct ShaderComputeLayout
+{
+    unsigned long x;
+    unsigned long y;
+    unsigned long z;
+};
+
+struct ShaderGraphReader
+{
+    struct ShaderXMLTag
+    {
+        unsigned long hashCode;
+    };
+
+    struct ShaderGLSLShaderXMLTag : ShaderXMLTag //followed by shaderNameLen Bytes
+    {
+        ShaderStageType type;
+    };
+
+    struct ShaderComputeLayoutXMLTag : ShaderXMLTag
+    {
+        ShaderComputeLayout comps;
+    };
+
+    struct ShaderResourceItemXMLTag : ShaderXMLTag
+    {
+        ShaderStageType shaderstage;
+        ShaderResourceType resourceType;
+        ShaderResourceAction resourceAction;
+        int arrayCount;
+        int size;
+        int offset;
+    };
+
+    struct ShaderResourceSetXMLTag : ShaderXMLTag
+    {
+        int resourceCount;
+    };
+
+    static constexpr unsigned long
+        hash(char* str);
+
+    static constexpr unsigned long
+        hash(const std::string& string);
+
+
+    static ShaderGraph* CreateShaderGraph(const std::string& filename);
+
+    static int ProcessTag(char* fileData, int currentLocation, unsigned long* hash, bool* opening);
+
+    static int SkipLine(char* fileData, int currentLocation);
+    static int ReadValue(char* fileData, int currentLocation, char* str, int* len);
+
+    static int ReadAttributeName(char* fileData, int currentLocation, unsigned long* hash);
+
+    static int ReadAttributeValueHash(char* fileData, int currentLocation, unsigned long* hash);
+
+    static int ReadAttributeValueVal(char* fileData, int currentLocation, unsigned long* val);
+
+    static int ReadAttributes(char* fileData, int currentLocation, unsigned long* hashes, int* stackSize, int valType);
+
+    static int HandleGLSLShader(char* fileData, int currentLocation, uintptr_t* offset, void* shaderData, int* shaderDataSize);
+
+    static int HandleShaderResourceItem(char* fileData, int currentLocation, uintptr_t* offset);
+
+    static constexpr int ASCIIToInt(char* str);
+
+    static int HandleComputeLayout(char* fileData, int currentLocation, uintptr_t* offset);
+};
+
+
 
 HINSTANCE hInst;
 HWND hwnd;
@@ -298,10 +458,30 @@ bool g_IsInitialized = false;
 #define KiB 1024
 #define MiB 1024*1024
 
-static char globalMemoryPool[16*MiB];
-static char tempGlobalMemoryPool[8*MiB];
+#define TEMP_MEM_SIZE 64*MiB
+#define STORAGE_MEM_SIZE 128*MiB
+
+static char globalMemoryPool[STORAGE_MEM_SIZE];
+static char tempGlobalMemoryPool[TEMP_MEM_SIZE];
 static size_t tempGlobalAllocator = 0;
-static size_t tempGlobalAllocatorSize = 8*MiB;
+static size_t tempGlobalAllocatorSize = TEMP_MEM_SIZE;
+static size_t storageGlobalAllocator = 0;
+static size_t storageGlobalAllocatorSize = STORAGE_MEM_SIZE;
+
+
+void* AllocFromTemp(size_t size, size_t alignment)
+{
+    size_t current = tempGlobalAllocator;
+
+    if (current + size >= TEMP_MEM_SIZE)
+        current = 0;
+
+    current = (current + alignment - 1) & ~(alignment - 1);
+
+    tempGlobalAllocator += (size)+(current - tempGlobalAllocator);
+
+    return (void*)&tempGlobalMemoryPool[current];
+}
 
 
 enum class ComponentFormatType
@@ -544,7 +724,7 @@ void WriteToDeviceLocalMemory(int allocationIndex, void* data, size_t size, size
 ID3D12Resource* CreateImageResource(ID3D12Device2* device, UINT width, UINT height, UINT depth, UINT mips, D3D12_RESOURCE_FLAGS flags, DXGI_FORMAT format, D3D12_RESOURCE_DIMENSION dimension);
 void WriteToImageDeviceLocalMemory(ID3D12Resource* imageHandle, char* data, UINT width, UINT height, UINT componentCount, UINT totalImageSize, DXGI_FORMAT format, UINT mipLevels, UINT layers);
 void TransitionBufferBarrier(ID3D12GraphicsCommandList7* cmdBuffer, ID3D12Resource* resource, D3D12_BARRIER_SYNC srcSync, D3D12_BARRIER_ACCESS srcAccess, D3D12_BARRIER_SYNC dstSync, D3D12_BARRIER_ACCESS dstAccess);
-
+ID3D12RootSignature* CreateRootSignatureFromShaderGraph(ShaderGraph* graph);
 struct Camera
 {
     XMMATRIX proj;
@@ -588,9 +768,6 @@ PipelineObject triangles[2];
 
 ID3D12PipelineState* CreatePipelineStateObject(ID3D12Device2* device, ID3D12RootSignature* _rootSignature, ShaderHandles* handles, int count);
 ID3D12RootSignature* CreateRootSignature(ID3D12Device2* device, CD3DX12_ROOT_PARAMETER* rootParameters, UINT parameterCount, D3D12_ROOT_SIGNATURE_FLAGS flags);
-ID3D12RootSignature* CreateGenericRootSignature();
-
-
 
 
 size_t AllocFromDriverMemoryBuffer(DriverMemoryBuffer* dmb, size_t allocSize, size_t alignment)
@@ -785,7 +962,11 @@ DescriptorTypeImageSRV imageSrv = {};
 void DoSceneStuff()
 {
 
-    triangles[0].rootSignature = CreateGenericRootSignature();
+    ShaderGraph* mainLayout = ShaderGraphReader::CreateShaderGraph("DirectLayout.xml");
+
+    
+
+    triangles[0].rootSignature = CreateRootSignatureFromShaderGraph(mainLayout);//CreateGenericRootSignature();
 
     triangles[0].pipelineState = CreatePipelineStateObject(deviceHandle, triangles[0].rootSignature, shaderHandles, 2);
 
@@ -863,8 +1044,8 @@ void DoSceneStuff()
     triangles[0].descriptorHeapSelection[2] = 1;
 
     triangles[0].descriptorTableCount = 3;
-    triangles[0].descriptorRootParameterIndices[0] = 1;
-    triangles[0].descriptorRootParameterIndices[1] = 0;
+    triangles[0].descriptorRootParameterIndices[0] = 0;
+    triangles[0].descriptorRootParameterIndices[1] = 1;
     triangles[0].descriptorRootParameterIndices[2] = 2;
 
     triangles[1].topology = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
@@ -885,8 +1066,8 @@ void DoSceneStuff()
 
     triangles[1].descriptorTableCount = 3;
 
-    triangles[1].descriptorRootParameterIndices[0] = 1;
-    triangles[1].descriptorRootParameterIndices[1] = 0;
+    triangles[1].descriptorRootParameterIndices[0] = 0;
+    triangles[1].descriptorRootParameterIndices[1] = 1;
     triangles[1].descriptorRootParameterIndices[2] = 2;
 
     DescriptorTypeHeader* types2[1] = { (DescriptorTypeHeader*)&world2Resource };
@@ -1963,6 +2144,9 @@ int Render()
             int heapindex = triangles[i].descriptorHeapSelection[j];
             int step = (heapindex == 0 ? mainSRVDescriptorHeap.descriptorHeapHandleSize : mainSamplerDescriptorHeap.descriptorHeapHandleSize);
             CD3DX12_GPU_DESCRIPTOR_HANDLE handle = CD3DX12_GPU_DESCRIPTOR_HANDLE(triangles[i].descriptorHeap[heapindex]->GetGPUDescriptorHandleForHeapStart(), triangles[i].descriptorHeapPointer[j] + (currentFrame * triangles[i].resourceCount[j]), step);
+      
+            
+            
             graphicCommandBuffer->SetGraphicsRootDescriptorTable(triangles[i].descriptorRootParameterIndices[j], handle);
         }
 
@@ -2562,94 +2746,7 @@ ID3D12RootSignature* CreateRootSignature(ID3D12Device2* device, CD3DX12_ROOT_PAR
 };
 
 
-enum class ShaderResourceType
-{
-    SAMPLER2D = 1,
-    STORAGE_BUFFER = 2,
-    UNIFORM_BUFFER = 4,
-    CONSTANT_BUFFER = 8,
-    IMAGESTORE2D = 16,
-    IMAGESTORE3D = 32,
-    SAMPLERBINDLESS = 64,
-    BUFFER_VIEW = 128,
-    SAMPLER3D = 129,
-    SAMPLERCUBE = 130,
-    INVALID_SHADER_RESOURCE = 0x7FFFFFFF
-};
 
-enum class ShaderResourceAction
-{
-    SHADERREAD = 1,
-    SHADERWRITE = 2,
-    SHADERREADWRITE = 3
-};
-
-enum ShaderStageTypeBits
-{
-    VERTEXSHADERSTAGE = 1,
-    FRAGMENTSHADERSTAGE = 2,
-    COMPUTESHADERSTAGE = 4,
-};
-
-typedef int ShaderStageType;
-
-
-struct ShaderSetLayout
-{
-    int vulkanDescLayout;
-    int bindingCount;
-    int resourceStart;
-};
-
-struct ShaderResource
-{
-    ShaderStageType stages;
-    ShaderResourceAction action;
-    ShaderResourceType type;
-    int set;
-    int binding;
-    int arrayCount;
-    int size;
-    int offset;
-};
-
-struct ShaderResourceSet
-{
-    int bindingCount;
-    int layoutHandle;
-    int setCount;
-    int barrierCount;
-};
-
-struct ShaderResourceHeader
-{
-    ShaderResourceType type;
-    ShaderResourceAction action;
-    int binding;
-    int arrayCount;
-};
-
-struct ShaderMap
-{
-    ShaderStageType type;
-    int shaderReference;
-    int GetMapSize() const;
-};
-
-struct ShaderGraph
-{
-    int shaderMapCount;
-    int resourceSetCount;
-    int resourceCount;
-
-    uintptr_t GetSet(int setIndex);
-
-    uintptr_t GetResource(int resourceIndex);
-
-    uintptr_t GetMap(int mapIndex);
-
-    int GetGraphSize() const;
-};
 
 uintptr_t ShaderGraph::GetSet(int setIndex)
 {
@@ -2682,40 +2779,924 @@ int ShaderMap::GetMapSize() const
 {
     return sizeof(ShaderMap);
 }
+#include <stdexcept>
 
-
-ID3D12RootSignature* CreateRootSignature(UINT numberOfRootPs, UINT numOfDescriptors, UINT numInline, UINT numResources)
+struct ShaderDetails
 {
-    ID3D12RootSignature* rootSignature = CreateRootSignature(deviceHandle, nullptr, numberOfRootPs, D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
+    int shaderNameSize;
+    int shaderDataSize;
 
-    return rootSignature;
+    ShaderDetails* GetNext();
+
+    char* GetString();
+
+    void* GetShaderData();
+};
+
+ShaderDetails* ShaderDetails::GetNext()
+{
+    return (ShaderDetails*)((uintptr_t)this + sizeof(ShaderDetails) + shaderDataSize + shaderNameSize);
+}
+
+char* ShaderDetails::GetString()
+{
+    return (char*)((uintptr_t)this + sizeof(ShaderDetails));
+}
+
+void* ShaderDetails::GetShaderData()
+{
+    return (void*)((uintptr_t)this + sizeof(ShaderDetails) + shaderNameSize);
+}
+
+constexpr unsigned long
+ShaderGraphReader::hash(char* str)
+{
+    unsigned long hash = 5381;
+    int c;
+
+    while (c = *str++) {
+        if (((c - 'A') >= 0 && (c - 'Z') <= 0) || ((c - 'a') >= 0 && (c - 'z') <= 0))
+            hash = ((hash << 5) + hash) + c; /* hash * 33 + c */
+    }
+
+    return hash;
+}
+
+constexpr unsigned long
+ShaderGraphReader::hash(const std::string& string)
+{
+    unsigned long hash = 5381;
+    int c;
+
+    const char* str = string.c_str();
+
+    while (c = *str++) {
+        if (((c - 'A') >= 0 && (c - 'Z') <= 0) || ((c - 'a') >= 0 && (c - 'z') <= 0) || ((c - '0') >= 0 && (c - '9') <= 0))
+            hash = ((hash << 5) + hash) + c; /* hash * 33 + c */
+    }
+
+    return hash;
+}
+
+size_t shaderGraphSize = 0;
+char readerMemBuffer[64 * KiB];
+size_t readerMemBufferAllocate = 0;
+
+ShaderGraph* ShaderGraphReader::CreateShaderGraph(
+    const std::string& filename
+)
+{
+
+    uintptr_t TreeNodes[50]{};
+    int SetNodes[15]{};
+    int ShaderRefs[5]{};
+    ShaderDetails* details[5]{};
+
+    OSFileHandle fileHandle;
+
+   auto ret = OSOpenFile(filename.c_str(), READ, &fileHandle);
+
+    if (ret)
+    {
+        throw std::runtime_error("Shader Init file is unable to be opened");
+    }
+
+    char* data = (char*)AllocFromTemp(fileHandle.fileLength, 64);
+
+    shaderGraphSize = fileHandle.fileLength;
+
+    OSReadFile(&fileHandle, fileHandle.fileLength, data);
+
+    OSCloseFile(&fileHandle);
+
+    int shaderCount = 0;
+    int shaderResourceCount = 0;
+    int setCount = 0;
+
+    int lastShader = 0;
+    int shaderDetailDataStride = 0;
+
+    int tagCount = 0;
+    int curr = 0;
+
+    int stride = SkipLine(data, curr);
+    curr += stride;
+
+    while (curr + stride < shaderGraphSize)
+    {
+
+        unsigned long hashl = 0;
+        bool opening = true;
+        stride = ProcessTag(data, curr, &hashl, &opening);
+        curr += stride;
+
+        stride = SkipLine(data, curr);
+
+        if (opening)
+        {
+            tagCount++;
+        }
+
+
+
+        switch (hashl)
+        {
+        case hash("ShaderGraph"):
+            //std::cout << "ShaderGraph" << std::endl;
+            if (!opening)
+                curr = shaderGraphSize;
+            break;
+           
+        case hash("HLSLShader"):
+            //std::cout << "GLSLShader" << std::endl;
+            if (opening) {
+                curr += stride;
+                stride = SkipLine(data, curr);
+                shaderCount++;
+            }
+            break;
+            
+        case hash("ShaderResourceSet"):
+            //std::cout << "ShaderResourceSet" << std::endl;
+            if (opening) {
+                SetNodes[setCount] = tagCount;
+                setCount++;
+            }
+            break;
+        case hash("ShaderResourceItem"):
+            //std::cout << "ShaderResourceItem" << std::endl;
+            if (opening) {
+                stride = HandleShaderResourceItem(data, curr, &TreeNodes[tagCount]);
+                shaderResourceCount++;
+            }
+            break;
+        case hash("ComputeLayout"):
+            //std::cout << "ComputeLayout" << std::endl;
+            if (opening) {
+                stride = HandleComputeLayout(data, curr, &TreeNodes[tagCount]);
+            }
+
+            break;
+        }
+
+        curr += stride;
+
+
+    }
+
+    
+
+    ShaderGraph* graph = (ShaderGraph*)(AllocFromTemp(sizeof(ShaderGraph) + (setCount * sizeof(ShaderSetLayout)) + (shaderResourceCount * sizeof(ShaderResource)) + (shaderCount * sizeof(ShaderMap)), 4));
+
+    memset(graph, 0, sizeof(ShaderGraph) + (setCount * sizeof(ShaderSetLayout)) + (shaderResourceCount * sizeof(ShaderResource)));
+
+    graph->shaderMapCount = shaderCount;
+    graph->resourceSetCount = setCount;
+
+    /*
+    int shaderIndex = 0;
+
+    for (int j = 0; j < shaderCount; j++)
+    {
+        ShaderMap* map = (ShaderMap*)graph->GetMap(j);
+
+        ShaderGLSLShaderXMLTag* tag = (ShaderGLSLShaderXMLTag*)TreeNodes[ShaderRefs[j]];
+
+        ShaderStageType type = tag->type;
+
+        if (type == ShaderStageTypeBits::COMPUTESHADERSTAGE)
+        {
+            ShaderComputeLayoutXMLTag* ctag = (ShaderComputeLayoutXMLTag*)TreeNodes[ShaderRefs[j] + 1];
+            ShaderDetails* deats = details[j];
+            ShaderComputeLayout* layout = (ShaderComputeLayout*)deats->GetShaderData();
+            layout->x = ctag->comps.x;
+            layout->y = ctag->comps.y;
+            layout->z = ctag->comps.z;
+        }
+
+        map->type = type;
+
+
+    }
+    */
+
+    int resourceIter = 0;
+
+    for (int i = 0; i < setCount; i++)
+    {
+
+        ShaderSetLayout* setLay = (ShaderSetLayout*)graph->GetSet(i);
+        int resIter = SetNodes[i] + 1;
+        ShaderResourceItemXMLTag* tag = (ShaderResourceItemXMLTag*)TreeNodes[resIter];
+        int bindingCount = 0;
+
+        setLay->resourceStart = resourceIter;
+        while (tag && tag->hashCode == hash("ShaderResourceItem"))
+        {
+
+            ShaderResource* resource = (ShaderResource*)graph->GetResource(resourceIter++);
+            if (tag->resourceType == ShaderResourceType::CONSTANT_BUFFER)
+            {
+                resource->binding = ~0;
+            }
+            else
+            {
+                resource->binding = bindingCount;
+            }
+
+            resource->stages = tag->shaderstage;
+
+            resource->action = tag->resourceAction;
+            resource->type = tag->resourceType;
+            resource->arrayCount = tag->arrayCount;
+            resource->set = i;
+            resource->size = tag->size;
+            resource->offset = tag->offset;
+            setLay->bindingCount++;
+
+
+            if (!(tag->resourceType == ShaderResourceType::CONSTANT_BUFFER))
+            {
+                bindingCount++;
+            }
+
+            tag = (ShaderResourceItemXMLTag*)TreeNodes[++resIter];
+        }
+    }
+
+    graph->resourceCount = resourceIter;
+
+    readerMemBufferAllocate = 0;
+
+    return graph;
+}
+
+int ShaderGraphReader::ProcessTag(char* fileData, int currentLocation, unsigned long* hash, bool* opening)
+{
+    int count = 0;
+    char* data = fileData + currentLocation;
+    size_t size = shaderGraphSize;
+
+    unsigned long hashl = 5381;
+
+    while (currentLocation + count < size)
+    {
+        if (std::isspace(data[count]) && hashl == 5381)
+        {
+            count++;
+            continue;
+        }
+
+        if (data[count] != '<' && hashl == 5381)
+            throw std::runtime_error("malformed xml tag");
+
+        if (data[count] == '\n' || data[count] == ' ' || data[count] == '>')
+        {
+            count++;
+            break;
+        }
+
+        if (data[count] == '<')
+        {
+            count++;
+            if (data[count] == '/')
+            {
+                *opening = false;
+                count++;
+            }
+        }
+
+        hashl = ((hashl << 5) + hashl) + data[count];
+
+        count++;
+    }
+
+    *hash = hashl;
+
+    return count;
+}
+
+int ShaderGraphReader::SkipLine(char* fileData, int currentLocation)
+{
+    int count = 0;
+    char* data = fileData + currentLocation;
+    size_t size = shaderGraphSize;
+    while (currentLocation + count < size && data[count++] != '\n');
+    data = fileData + currentLocation + count;
+    return count;
+}
+
+int ShaderGraphReader::ReadValue(char* fileData, int currentLocation, char* str, int* len)
+{
+    int memCounter = 0;
+    int count = 0;
+    char* data = fileData + currentLocation;
+    while (true)
+    {
+        int test = count++;
+
+        int c = data[test];
+
+        if (c == '\n')
+        {
+            count = count - 1;
+            break;
+        }
+
+        if (std::isspace(c))
+            continue;
+
+        str[memCounter++] = c;
+
+    }
+
+    str[memCounter++] = 0;
+
+    *len = (memCounter);
+
+    return count;
+}
+#define MAX_ATTRIBUTE_LEN 50
+int ShaderGraphReader::ReadAttributeName(char* fileData, int currentLocation, unsigned long* hash)
+{
+    int count = 0;
+    char* data = fileData + currentLocation;
+
+    unsigned long hashl = 5381;
+
+
+    while (true)
+    {
+        int test = count++;
+
+        int c = data[test];
+
+        if (c == '>')
+        {
+            count = count - 1;
+            break;
+        }
+
+        if (c == '=')
+            break;
+
+        if (std::isspace(c))
+            continue;
+
+        if (count == MAX_ATTRIBUTE_LEN + currentLocation)
+            throw std::runtime_error("malformed xml attribute");
+
+        hashl = ((hashl << 5) + hashl) + c;
+
+    }
+
+    *hash = hashl;
+
+    return count;
+}
+
+int ShaderGraphReader::ReadAttributeValueHash(char* fileData, int currentLocation, unsigned long* hash)
+{
+    int count = 0;
+    char* data = fileData + currentLocation;
+
+    unsigned long hashl = 5381;
+
+    while (true)
+    {
+        int test = count++;
+
+        int c = data[test];
+
+        if (c == '>')
+        {
+            count = count - 1;
+            break;
+        }
+
+        if (std::isspace(c))
+        {
+            if (hashl == 5381)
+                continue;
+            else
+                break;
+        }
+
+        if (c == '\"' || c == '\'')
+            continue;
+
+        if (count == MAX_ATTRIBUTE_LEN + currentLocation) {
+            throw std::runtime_error("malformed xml attribute");
+        }
+
+        hashl = ((hashl << 5) + hashl) + c;
+
+    }
+
+    *hash = hashl;
+
+    return count;
+}
+
+int ShaderGraphReader::ReadAttributeValueVal(char* fileData, int currentLocation, unsigned long* val)
+{
+    int count = 0;
+    char* data = fileData + currentLocation;
+
+    unsigned long out = 0;
+
+    while (true)
+    {
+        int test = count++;
+
+        int c = data[test];
+
+        if (c == '>')
+        {
+            count = count - 1;
+            break;
+        }
+
+        if (std::isspace(c))
+        {
+            if (out == 0)
+                continue;
+            else
+                break;
+        }
+
+        if (c == '\"' || c == '\'')
+            continue;
+
+        if (count == (MAX_ATTRIBUTE_LEN + currentLocation) || ((c - '0') < 0 || (c - '9') > 0)) {
+            throw std::runtime_error("malformed xml attribute");
+        }
+
+        out = (out * 10) + (c - '0');
+
+    }
+
+    *val = out;
+
+    return count;
+}
+
+#define MAX_ATTRIBUTE_LINE_LEN 200
+
+int ShaderGraphReader::ReadAttributes(char* fileData, int currentLocation, unsigned long* hashes, int* stackSize, int valType)
+{
+    int count = 0;
+    char* data = fileData + currentLocation;
+    size_t size = shaderGraphSize;
+
+    int ret = 0;
+    char c = data[ret];
+
+    while (c != '>' && ret < MAX_ATTRIBUTE_LINE_LEN && (currentLocation + ret) < size)
+    {
+        ret += ReadAttributeName(fileData, currentLocation + ret, &hashes[count]);
+
+        switch (hashes[count])
+        {
+        case hash("type"):
+        case hash("used"):
+        case hash("rw"):
+        {
+            ret += ReadAttributeValueHash(fileData, currentLocation + ret, &hashes[count + 1]);
+            break;
+        }
+        case hash("offset"):
+        case hash("size"):
+        case hash("count"):
+        case hash("x"):
+        case hash("y"):
+        case hash("z"):
+        {
+            ret += ReadAttributeValueVal(fileData, currentLocation + ret, &hashes[count + 1]);
+            break;
+        }
+        }
+        c = data[ret];
+        count += 2;
+    }
+
+    *stackSize = count;
+
+    while (c != '\n' && ret < MAX_ATTRIBUTE_LINE_LEN && (currentLocation + ret) < size)
+    {
+        c = data[ret++];
+    }
+
+    return ret;
 }
 
 
-ID3D12RootSignature* CreateGenericRootSignature()
+
+int ShaderGraphReader::HandleGLSLShader(char* fileData, int currentLocation, uintptr_t* offset, void* shaderData, int* shaderDataSize)
 {
-    CD3DX12_ROOT_PARAMETER rootParameters[3]{};
+    unsigned long hashes[6];
 
-    CD3DX12_DESCRIPTOR_RANGE range;
-    range.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0); // 1 SRV at t0
+    int size = 0;
 
-    CD3DX12_DESCRIPTOR_RANGE irange;
-    irange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 1); // 1 SRV at t1
+    int ret = ReadAttributes(fileData, currentLocation, hashes, &size, 0);
 
-    CD3DX12_DESCRIPTOR_RANGE crange;
-    crange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_CBV, 1, 0); // 1 SRV at b0
+    uintptr_t detailHead = (uintptr_t)shaderData;
 
-    CD3DX12_DESCRIPTOR_RANGE srange;
-    srange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER, 1, 0, 0); // 1 Sampler at s0
+    ShaderDetails* details = (ShaderDetails*)detailHead;
 
-    CD3DX12_DESCRIPTOR_RANGE arr[4] = { crange, range, irange, srange };
+    details->shaderDataSize = 0;
+    details->shaderNameSize = 0;
 
-    rootParameters[0].InitAsDescriptorTable(1, arr, D3D12_SHADER_VISIBILITY_VERTEX);
-    rootParameters[1].InitAsDescriptorTable(2, arr + 1,  D3D12_SHADER_VISIBILITY_ALL);
-    rootParameters[2].InitAsDescriptorTable(1, arr + 3, D3D12_SHADER_VISIBILITY_PIXEL);
+    detailHead += sizeof(ShaderDetails);
 
-    ID3D12RootSignature* rootSignature = CreateRootSignature(deviceHandle, rootParameters, 3, D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
-    
+    ShaderGLSLShaderXMLTag* tag = (ShaderGLSLShaderXMLTag*)&readerMemBuffer[readerMemBufferAllocate];
+
+    *offset = (uintptr_t)tag;
+
+    tag->hashCode = hash("HLSLShader");
+
+    int stackIter = 0;
+
+    while (size > stackIter)
+    {
+        unsigned long code = hashes[stackIter];
+        unsigned long codeV = hashes[stackIter + 1];
+
+        switch (code)
+        {
+        case hash("type"):
+        {
+            switch (codeV)
+            {
+            case hash("compute"):
+                details->shaderDataSize = 12;
+                tag->type = ShaderStageTypeBits::COMPUTESHADERSTAGE;
+                break;
+            case hash("vert"):
+                tag->type = ShaderStageTypeBits::VERTEXSHADERSTAGE;
+                break;
+            case hash("fragment"):
+                tag->type = ShaderStageTypeBits::FRAGMENTSHADERSTAGE;
+                break;
+            }
+            break;
+        }
+
+        default:
+            throw std::runtime_error("Failed GLSL Type of Shader");
+            break;
+        }
+
+        stackIter += 2;
+    }
+
+    readerMemBufferAllocate += sizeof(ShaderGLSLShaderXMLTag);
+
+    ret += ReadValue(fileData, currentLocation + ret, details->GetString(), &details->shaderNameSize);
+
+    *shaderDataSize = (sizeof(ShaderDetails) + details->shaderNameSize + details->shaderDataSize);
+
+    return ret;
+}
+
+int ShaderGraphReader::HandleShaderResourceItem(char* fileData, int currentLocation, uintptr_t* offset)
+{
+    unsigned long hashes[12];
+
+    int size = 0;
+
+    int ret = ReadAttributes(fileData, currentLocation, hashes, &size, 0);
+
+    ShaderResourceItemXMLTag* tag = (ShaderResourceItemXMLTag*)&readerMemBuffer[readerMemBufferAllocate];
+
+    *offset = (uintptr_t)tag;
+
+    tag->hashCode = hash("ShaderResourceItem");
+
+    tag->arrayCount = 1;
+
+    int stackIter = 0;
+
+    while (size > stackIter)
+    {
+        unsigned long code = hashes[stackIter];
+        unsigned long codeV = hashes[stackIter + 1];
+        switch (code)
+        {
+        case hash("type"):
+        {
+            switch (codeV)
+            {
+            case hash("samplerCube"):
+                tag->resourceType = ShaderResourceType::SAMPLERCUBE;
+                tag->resourceAction = ShaderResourceAction::SHADERREAD;
+                break;
+            case hash("sampler2d"):
+                tag->resourceType = ShaderResourceType::SAMPLER2D;
+                tag->resourceAction = ShaderResourceAction::SHADERREAD;
+                break;
+            case hash("storageimage"):
+                tag->resourceType = ShaderResourceType::IMAGESTORE2D;
+                break;
+            case hash("storage"):
+                tag->resourceType = ShaderResourceType::STORAGE_BUFFER;
+                break;
+            case hash("uniform"):
+                tag->resourceType = ShaderResourceType::UNIFORM_BUFFER;
+                tag->resourceAction = ShaderResourceAction::SHADERREAD;
+                break;
+            case hash("constantbuffer"):
+                tag->resourceType = ShaderResourceType::CONSTANT_BUFFER;
+                tag->resourceAction = ShaderResourceAction::SHADERREAD;
+                break;
+            case hash("sampler2dBindless"):
+                tag->resourceType = ShaderResourceType::SAMPLERBINDLESS;
+                tag->resourceAction = ShaderResourceAction::SHADERREAD;
+                break;
+            case hash("sampler3d"):
+                tag->resourceType = ShaderResourceType::SAMPLER3D;
+                tag->resourceAction = ShaderResourceAction::SHADERREAD;
+                break;
+            case hash("bufferView"):
+                tag->resourceType = ShaderResourceType::BUFFER_VIEW;
+                break;
+            default:
+                throw std::runtime_error("Failed Resource Type");
+            }
+
+            break;
+        }
+        case hash("used"):
+        {
+            switch (codeV)
+            {
+            case hash("c"):
+                tag->shaderstage = ShaderStageTypeBits::COMPUTESHADERSTAGE;
+                break;
+            case hash("v"):
+                tag->shaderstage = ShaderStageTypeBits::VERTEXSHADERSTAGE;
+                break;
+            case hash("f"):
+                tag->shaderstage = ShaderStageTypeBits::FRAGMENTSHADERSTAGE;
+                break;
+            case hash("vf"):
+                tag->shaderstage = ShaderStageTypeBits::VERTEXSHADERSTAGE | ShaderStageTypeBits::FRAGMENTSHADERSTAGE;
+                break;
+            default:
+                throw std::runtime_error("Failed Used Type");
+            }
+
+            break;
+        }
+        case hash("rw"):
+        {
+            switch (codeV)
+            {
+            case hash("read"):
+                tag->resourceAction = ShaderResourceAction::SHADERREAD;
+                break;
+            case hash("write"):
+                tag->resourceAction = ShaderResourceAction::SHADERWRITE;
+                break;
+            case hash("readwrite"):
+                tag->resourceAction = ShaderResourceAction::SHADERREADWRITE;
+                break;
+            default:
+                throw std::runtime_error("Failed Action Type");
+            }
+
+            break;
+        }
+        case hash("count"):
+        {
+            tag->arrayCount = codeV;
+            break;
+        }
+        case hash("size"):
+        {
+            tag->size = codeV;
+            break;
+        }
+        case hash("offset"):
+        {
+            tag->offset = codeV;
+            break;
+        }
+        }
+
+        stackIter += 2;
+    }
+
+    readerMemBufferAllocate += sizeof(ShaderResourceItemXMLTag);
+
+    return ret;
+}
+
+
+constexpr int ShaderGraphReader::ASCIIToInt(char* str)
+{
+    int c;
+    int out = 0;
+
+    while (c = *str++) {
+        if ((c - '0') >= 0 && (c - '9') <= 0)
+            out = (out * 10) + (c - '0');
+    }
+
+    return out;
+}
+
+int ShaderGraphReader::HandleComputeLayout(char* fileData, int currentLocation, uintptr_t* offset)
+{
+    unsigned long hashesAndVals[6];
+
+    int size = 0;
+
+    int ret = ReadAttributes(fileData, currentLocation, hashesAndVals, &size, 1);
+
+    ShaderComputeLayoutXMLTag* tag = (ShaderComputeLayoutXMLTag*)&readerMemBuffer[readerMemBufferAllocate];
+
+    *offset = (uintptr_t)tag;
+
+    tag->hashCode = hash("ComputeLayout");
+
+    int stackIter = 0;
+
+    while (size > stackIter)
+    {
+        unsigned long code = hashesAndVals[stackIter];
+        unsigned long comp = hashesAndVals[stackIter + 1];
+
+        switch (code)
+        {
+        case hash("x"):
+        {
+            tag->comps.x = comp;
+
+            break;
+        }
+        case hash("y"):
+        {
+            tag->comps.y = comp;
+            break;
+        }
+        case hash("z"):
+        {
+            tag->comps.z = comp;
+
+            break;
+        }
+        }
+
+        stackIter += 2;
+    }
+
+    readerMemBufferAllocate += sizeof(ShaderComputeLayoutXMLTag);
+
+    return ret;
+}
+
+
+ID3D12RootSignature* CreateRootSignatureFromShaderGraph(ShaderGraph* graph)
+{
+    UINT numDescriptorsTables = graph->resourceSetCount, numRootParameters = graph->resourceSetCount, numOfRanges = graph->resourceCount;
+
+    UINT samplerCount = 0;
+  
+    for (int i = 0; i < graph->resourceCount; i++)
+    {
+        ShaderResource* resource = (ShaderResource*)graph->GetResource(i);
+
+        switch (resource->type)
+        {
+        case ShaderResourceType::UNIFORM_BUFFER:
+
+            break;
+        case ShaderResourceType::SAMPLER2D:
+            numDescriptorsTables++;
+            numRootParameters++;
+            numOfRanges++;
+            samplerCount++;
+            break;
+
+        case ShaderResourceType::CONSTANT_BUFFER:
+           
+            break;
+        }
+    }
+
+
+    CD3DX12_DESCRIPTOR_RANGE* ranges = (CD3DX12_DESCRIPTOR_RANGE*)AllocFromTemp(sizeof(CD3DX12_DESCRIPTOR_RANGE) * numOfRanges, 4);
+    ShaderStageType* visibility = (ShaderStageType*)AllocFromTemp(sizeof(ShaderStageType) * numRootParameters, 4);
+
+    UINT samplerIndex = 0, srvIndex = 0, cbvIndex = 0, samplerRangeIndex = numOfRanges - 1, samplerRangeParameterIndex = numOfRanges-samplerCount;
+    int rangeParameterIndex = 0;
+
+
+    for (int i = 0; i < graph->resourceCount; i++)
+    {
+        ShaderResource* resource = (ShaderResource*)graph->GetResource(i);
+        
+        switch (resource->type)
+        {
+        case ShaderResourceType::CONSTANT_BUFFER:
+        {
+            CD3DX12_DESCRIPTOR_RANGE* range = &ranges[rangeParameterIndex++];
+            range->Init(D3D12_DESCRIPTOR_RANGE_TYPE_CBV, 1, cbvIndex++);
+            visibility[resource->set] |= resource->stages;
+            break;
+        }
+        case ShaderResourceType::SAMPLER2D:
+        {
+            CD3DX12_DESCRIPTOR_RANGE* range = &ranges[samplerRangeParameterIndex++];
+            range->Init(D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER, 1, samplerIndex++);
+            range = &ranges[rangeParameterIndex++];
+            range->Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, srvIndex++);
+
+       
+
+       
+            visibility[resource->set] |= resource->stages;
+            visibility[numRootParameters - 1] |= resource->stages;
+
+            break;
+
+        }
+        case ShaderResourceType::UNIFORM_BUFFER:
+        {
+            CD3DX12_DESCRIPTOR_RANGE* range = &ranges[rangeParameterIndex++];
+            range->Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, srvIndex++);
+
+           
+            visibility[resource->set] |= resource->stages;
+            break;
+        }
+        }
+    }
+
+    CD3DX12_ROOT_PARAMETER* rootParameters = (CD3DX12_ROOT_PARAMETER*)AllocFromTemp(sizeof(CD3DX12_ROOT_PARAMETER) * numRootParameters, 4);
+
+    UINT rootParamIndex = 0, rangeIterIndex = 0;
+
+
+    for (int i = 0; i < graph->resourceSetCount; i++)
+    {
+        ShaderSetLayout* layout = (ShaderSetLayout*)graph->GetSet(i);
+
+        D3D12_SHADER_VISIBILITY visible = D3D12_SHADER_VISIBILITY_ALL;
+
+        if (!(visibility[rootParamIndex] & (visibility[rootParamIndex] - 1)))
+        {
+            switch (visibility[rootParamIndex])
+            {
+            case ShaderStageTypeBits::COMPUTESHADERSTAGE:
+                visible = D3D12_SHADER_VISIBILITY_ALL;
+                break;
+
+            case ShaderStageTypeBits::VERTEXSHADERSTAGE:
+                visible = D3D12_SHADER_VISIBILITY_VERTEX;
+                break;
+
+            case ShaderStageTypeBits::FRAGMENTSHADERSTAGE:
+                visible = D3D12_SHADER_VISIBILITY_PIXEL;
+                break;
+            }
+        }
+
+        rootParameters[rootParamIndex].InitAsDescriptorTable(layout->bindingCount, ranges + rangeIterIndex, visible);
+
+        rootParamIndex++;
+
+        rangeIterIndex += layout->bindingCount;
+    }
+
+    if (samplerCount)
+    {
+        D3D12_SHADER_VISIBILITY visible = D3D12_SHADER_VISIBILITY_ALL;
+
+        if (!(visibility[numRootParameters-1] & (visibility[numRootParameters - 1] - 1)))
+        {
+            switch (visibility[numRootParameters - 1])
+            {
+            case ShaderStageTypeBits::COMPUTESHADERSTAGE:
+                visible = D3D12_SHADER_VISIBILITY_ALL;
+                break;
+
+            case ShaderStageTypeBits::VERTEXSHADERSTAGE:
+                visible = D3D12_SHADER_VISIBILITY_VERTEX;
+                break;
+
+            case ShaderStageTypeBits::FRAGMENTSHADERSTAGE:
+                visible = D3D12_SHADER_VISIBILITY_PIXEL;
+                break;
+            }
+        }
+
+        rootParameters[numRootParameters - 1].InitAsDescriptorTable(samplerCount, ranges + graph->resourceCount, visible);
+    }
+   
+    ID3D12RootSignature* rootSignature = CreateRootSignature(deviceHandle, rootParameters, numRootParameters, D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
+
     return rootSignature;
 }
 
@@ -2819,7 +3800,7 @@ static_assert(sizeof(BitmapInfoHeader) == 40, "no match for bih");
 
 void ParseBMP(TextureDetails* details, const char* name)
 {
-    std::vector<char> data; 
+    char* data = nullptr; 
     OSFileHandle outHandle{};
 
     OSFileFlags openingFlags = READ;
@@ -2833,13 +3814,13 @@ void ParseBMP(TextureDetails* details, const char* name)
 
     int size = outHandle.fileLength;
 
-    data.resize(size);
+    data = (char*)AllocFromTemp(size, 64);
 
-    OSReadFile(&outHandle, size, data.data());
+    OSReadFile(&outHandle, size, data);
 
     OSCloseFile(&outHandle);
 
-    auto iter = data.begin();
+    auto iter = data;
     BitmapFileHeader fh;
     std::copy(iter, iter + sizeof(BitmapFileHeader), reinterpret_cast<char*>(&fh));
     if (fh.bfType != 0x4D42)
@@ -2887,9 +3868,9 @@ void ParseBMP(TextureDetails* details, const char* name)
     uLine = bottomLine;
 
 
-    auto iter2 = data.data() + (fh.bfOffBits + (uLine * bytesPerRow));
+    auto iter2 = data + (fh.bfOffBits + (uLine * bytesPerRow));
 
-    details->data = new char[details->dataSize];
+    details->data = (char*)AllocFromTemp(details->dataSize, 64);
 
     auto copy = details->data;
 

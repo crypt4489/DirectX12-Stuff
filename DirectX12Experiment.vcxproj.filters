@@ -27,4 +27,7 @@
   <ItemGroup>
     <EmbeddedResource Include="basicvertex.hlsl" />
   </ItemGroup>
+  <ItemGroup>
+    <Xml Include="DirectLayout.xml" />
+  </ItemGroup>
 </Project>

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ShaderGraph>
+	<HLSLShader type="vert">
+		VS.bin
+	</HLSLShader>
+	<HLSLShader type="fragment">
+		PS.bin
+	</HLSLShader>
+	<ShaderResourceSet>
+		<ShaderResourceItem type="uniform" used="v">
+		</ShaderResourceItem>
+		<ShaderResourceItem type="sampler2d" used="f">
+		</ShaderResourceItem>
+	</ShaderResourceSet>
+	<ShaderResourceSet>
+		<ShaderResourceItem type="constantbuffer" used="v">
+		</ShaderResourceItem>
+	</ShaderResourceSet>
+</ShaderGraph>
