@@ -9,7 +9,9 @@
 	<ShaderResourceSet>
 		<ShaderResourceItem type="uniform" used="v">
 		</ShaderResourceItem>
-		<ShaderResourceItem type="sampler2d" used="f">
+		<ShaderResourceItem type="image2D" used="f" rw="read">
+		</ShaderResourceItem>
+		<ShaderResourceItem type="sampler" used="f">
 		</ShaderResourceItem>
 	</ShaderResourceSet>
 	<ShaderResourceSet>

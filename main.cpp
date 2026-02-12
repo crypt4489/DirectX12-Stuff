@@ -2,6 +2,7 @@
 
 #include <Windows.h>
 #include <string>
+#include <array>
 
 struct OSFileHandle
 {
@@ -287,6 +288,7 @@ enum class ShaderResourceType
     BUFFER_VIEW = 128,
     SAMPLER3D = 129,
     SAMPLERCUBE = 130,
+    SAMPLERSTATE = 131,
     INVALID_SHADER_RESOURCE = 0x7FFFFFFF
 };
 
@@ -745,7 +747,6 @@ struct PipelineObject
     int descriptorTableCount;
     int descriptorHeapPointer[8];
     int resourceCount[8];
-    int descriptorRootParameterIndices[8];
     int descriptorHeapSelection[8]; //number of descriptor tables
     D3D_PRIMITIVE_TOPOLOGY topology;//D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST
     int instanceCount;
@@ -820,7 +821,7 @@ enum DescriptorType
     PUSHCONSTANTS = 0,
     CONSTANTBUFFER = 1,
     UNIFORMBUFFER = 2,
-    SAMPLER2D = 3,
+    SAMPLERSTATE = 3,
     IMAGESRV = 4,
 };
 
@@ -848,13 +849,13 @@ struct DescriptorTypeImageSRV : public DescriptorTypeHeader
 };
 
 void CreateDescriptorHeapManager(DescriptorHeap* heap, UINT maxDescriptorHandles, D3D12_DESCRIPTOR_HEAP_TYPE type, D3D12_DESCRIPTOR_HEAP_FLAGS flags);
-int CreateDescriptorTable(DescriptorTypeHeader** header, int descriptorCount, int frameCount, DescriptorHeap* heap);
+int CreateDescriptorTable(uintptr_t header, int descriptorCount, int frameCount, DescriptorHeap* heap);
 void CreateSRVDescriptorHandle(ID3D12Device2* device, ID3D12Resource* bufferHandle, UINT offset, UINT numCount, UINT size, DXGI_FORMAT format, DescriptorHeap* heap, D3D12_SRV_DIMENSION dimension);
 void CreateImageSRVDescriptorHandle(ID3D12Device2* device, ID3D12Resource* bufferHandle, UINT mipsLevels, DXGI_FORMAT format, DescriptorHeap* heap, D3D12_SRV_DIMENSION dimension);
 void CreateUAVDescriptorHandle(ID3D12Device2* device, ID3D12Resource* bufferHandle, UINT offset, UINT numCount, UINT size, DXGI_FORMAT format, DescriptorHeap* heap);
 void CreateCBVDescriptorHandle(ID3D12Device2* device, ID3D12Resource* bufferHandle, UINT offset, UINT size, DescriptorHeap* heap);
 void CreateImageSampler(ID3D12Device2* device, DescriptorHeap* samplerDescriptorHeap);
-
+void CreateTablesFromResourceSet(int* descriptorSets, int numDescriptorSet, PipelineObject* object);
 
 static uint16_t BoxIndices[36] = {
         2,  1,  0,
@@ -905,6 +906,522 @@ static XMVECTOR BoxVerts[48] =
 };
 
 
+enum class ImageLayout
+{
+    UNDEFINED = 0,
+    WRITEABLE = 1,
+    SHADERREADABLE = 2,
+    COLORATTACHMENT = 3,
+    DEPTHSTENCILATTACHMENT = 4
+};
+
+enum class ImageUsage
+{
+    DEPTHSTENCIL = 0,
+    COLOR = 1
+};
+
+enum BarrierActionBits
+{
+    WRITE_SHADER_RESOURCE = 1,
+    READ_SHADER_RESOURCE = 2,
+    READ_UNIFORM_BUFFER = 4,
+    READ_VERTEX_INPUT = 8,
+    READ_INDIRECT_COMMAND = 16
+};
+
+enum BarrierStageBits
+{
+    VERTEX_SHADER_BARRIER = 1,
+    VERTEX_INPUT_BARRIER = 2,
+    COMPUTE_BARRIER = 4,
+    FRAGMENT_BARRIER = 8,
+    BEGINNING_OF_PIPE = 16,
+    INDIRECT_DRAW_BARRIER = 32,
+};
+
+typedef int BarrierAction;
+
+typedef int BarrierStage;
+
+enum class MemoryBarrierType
+{
+    MEMORY_BARRIER = 0,
+    IMAGE_BARRIER = 1,
+    BUFFER_BARRIER = 2,
+    BARRIER_MAX_ENUM
+};
+
+struct ShaderResourceBarrier
+{
+    MemoryBarrierType type;
+    BarrierStage srcStage;
+    BarrierStage dstStage;
+    BarrierAction srcAction;
+    BarrierAction dstAction;
+};
+
+struct ImageShaderResourceBarrier : public ShaderResourceBarrier
+{
+    ImageLayout srcResourceLayout;
+    ImageLayout dstResourceLayout;
+    ImageUsage imageType;
+};
+
+struct ShaderResourceBufferBarrier : public ShaderResourceBarrier
+{
+};
+
+struct ShaderResourceSampler : public ShaderResourceHeader
+{
+    void* samplerHandle;
+};
+
+struct ShaderResourceImage : public ShaderResourceHeader
+{
+    void* textureHandle;
+};
+
+struct ShaderResourceSamplerBindless : public ShaderResourceHeader
+{
+    void** textureHandles;
+    int textureCount;
+};
+
+struct ShaderResourceBuffer : public ShaderResourceHeader
+{
+    int allocation;
+    int offset;
+};
+
+struct ShaderResourceBufferView : public ShaderResourceHeader
+{
+    int subAllocations;
+    int allocationIndex;
+};
+
+
+struct ShaderResourceConstantBuffer : public ShaderResourceHeader
+{
+    ShaderStageType stage;
+    int size;
+    int offset;
+    void* data;
+    int allocationIndex;
+};
+
+
+
+
+
+
+static char AllocateDSMemory[16 * KiB];
+uintptr_t DSAllocator = 0;
+
+std::array<uintptr_t, 50> descriptorSets;
+static int DSIndex = 0;
+
+constexpr std::array<int, 50> makeArray(int val) {
+    std::array<int, 50> arr{};
+    std::fill(arr.begin(), arr.end(), val);
+    return arr;
+}
+
+std::array<int, 50> srvDescriptorTablesStart = makeArray(-1);
+
+void BindBufferToShaderResource(int descriptorSet, int allocationIndex, int bindingIndex, int offset)
+{
+    uintptr_t head = descriptorSets[descriptorSet];
+    ShaderResourceSet* set = (ShaderResourceSet*)head;
+    uintptr_t* offsets = (uintptr_t*)(head + sizeof(ShaderResourceSet));
+
+    ShaderResourceBuffer* header = (ShaderResourceBuffer*)offsets[bindingIndex];
+
+    if (header->type != ShaderResourceType::UNIFORM_BUFFER && header->type != ShaderResourceType::STORAGE_BUFFER)
+        return;
+
+    header->allocation = allocationIndex;
+    header->offset = offset;
+}
+
+void BindImageResourceToShaderResource(int descriptorSet, void* index, int bindingIndex)
+{
+    uintptr_t head = descriptorSets[descriptorSet];
+    ShaderResourceSet* set = (ShaderResourceSet*)head;
+    uintptr_t* offsets = (uintptr_t*)(head + sizeof(ShaderResourceSet));
+
+    ShaderResourceImage* header = (ShaderResourceImage*)offsets[bindingIndex];
+
+    if (header->type != ShaderResourceType::IMAGESTORE2D)
+        return;
+
+    header->textureHandle = index;
+}
+
+void BindSamplerResourceToShaderResource(int descriptorSet, void* index, int bindingIndex)
+{
+    uintptr_t head = descriptorSets[descriptorSet];
+    ShaderResourceSet* set = (ShaderResourceSet*)head;
+    uintptr_t* offsets = (uintptr_t*)(head + sizeof(ShaderResourceSet));
+
+    ShaderResourceSampler* header = (ShaderResourceSampler*)offsets[bindingIndex];
+
+    if (header->type != ShaderResourceType::SAMPLERSTATE)
+        return;
+
+    header->samplerHandle  = index;
+}
+
+void BindSampledImageToShaderResource(int descriptorSet, void* index, int bindingIndex)
+{
+    uintptr_t head = descriptorSets[descriptorSet];
+    ShaderResourceSet* set = (ShaderResourceSet*)head;
+    uintptr_t* offsets = (uintptr_t*)(head + sizeof(ShaderResourceSet));
+
+    ShaderResourceImage* header = (ShaderResourceImage*)offsets[bindingIndex];
+
+    if (header->type != ShaderResourceType::SAMPLER2D && header->type != ShaderResourceType::SAMPLERCUBE && header->type != ShaderResourceType::SAMPLER3D)
+        return;
+
+    header->textureHandle = index;
+}
+
+void BindSampledImageArrayToShaderResource(int descriptorSet, void** indices, uint32_t texCount, int bindingIndex)
+{
+    uintptr_t head = descriptorSets[descriptorSet];
+    ShaderResourceSet* set = (ShaderResourceSet*)head;
+    uintptr_t* offsets = (uintptr_t*)(head + sizeof(ShaderResourceSet));
+
+    ShaderResourceSamplerBindless* header = (ShaderResourceSamplerBindless*)offsets[bindingIndex];
+
+    if (header->type != ShaderResourceType::SAMPLERBINDLESS)
+        return;
+
+    header->textureHandles = indices;
+    header->textureCount = texCount;
+}
+
+void BindBufferView(int descriptorSet, int allocationIndex, int bindingIndex, int subAllocations)
+{
+    uintptr_t head = descriptorSets[descriptorSet];
+    ShaderResourceSet* set = (ShaderResourceSet*)head;
+    uintptr_t* offsets = (uintptr_t*)(head + sizeof(ShaderResourceSet));
+
+    ShaderResourceBufferView* header = (ShaderResourceBufferView*)offsets[bindingIndex];
+
+    if (header->type != ShaderResourceType::BUFFER_VIEW)
+        return;
+
+
+    header->subAllocations = subAllocations;
+    header->allocationIndex = allocationIndex;
+}
+
+void BindBarrier(int descriptorSet, int binding, BarrierStage stage, BarrierAction action)
+{
+    uintptr_t head = descriptorSets[descriptorSet];
+    ShaderResourceSet* set = (ShaderResourceSet*)head;
+    uintptr_t* offsets = (uintptr_t*)(head + sizeof(ShaderResourceSet));
+
+
+    head = offsets[binding];
+    ShaderResourceHeader* desc = (ShaderResourceHeader*)offsets[binding];
+
+
+
+    switch (desc->type)
+    {
+    case ShaderResourceType::IMAGESTORE2D:
+    case ShaderResourceType::SAMPLER2D:
+    {
+        head += sizeof(ShaderResourceImage);
+        ShaderResourceBarrier* barrier = (ShaderResourceBarrier*)head;
+
+        barrier->dstAction = action;
+        barrier->dstStage = stage;
+        break;
+    }
+    case ShaderResourceType::BUFFER_VIEW:
+    {
+        head += sizeof(ShaderResourceBufferView);
+        ShaderResourceBufferBarrier* barrier = (ShaderResourceBufferBarrier*)head;
+        barrier->dstStage = stage;
+        barrier->dstAction = action;
+        break;
+    }
+    case ShaderResourceType::STORAGE_BUFFER:
+    case ShaderResourceType::UNIFORM_BUFFER:
+    {
+
+        head += sizeof(ShaderResourceBuffer);
+        ShaderResourceBufferBarrier* barrier = (ShaderResourceBufferBarrier*)head;
+        barrier->dstStage = stage;
+        barrier->dstAction = action;
+        break;
+    }
+    }
+
+
+}
+
+void BindImageBarrier(int descriptorSet, int binding, int barrierIndex, BarrierStage stage, BarrierAction action, ImageLayout oldLayout, ImageLayout dstLayout, bool location)
+{
+    uintptr_t head = descriptorSets[descriptorSet];
+    ShaderResourceSet* set = (ShaderResourceSet*)head;
+    uintptr_t* offsets = (uintptr_t*)(head + sizeof(ShaderResourceSet));
+
+
+    head = offsets[binding];
+    ShaderResourceHeader* desc = (ShaderResourceHeader*)offsets[binding];
+
+    if (desc->type != ShaderResourceType::SAMPLER2D && desc->type != ShaderResourceType::SAMPLERCUBE && desc->type != ShaderResourceType::SAMPLER3D && desc->type != ShaderResourceType::IMAGESTORE2D)
+        return;
+
+    switch (desc->type)
+    {
+    case ShaderResourceType::IMAGESTORE2D:
+    case ShaderResourceType::SAMPLER2D:
+        head += sizeof(ShaderResourceImage);
+
+        break;
+    case ShaderResourceType::STORAGE_BUFFER:
+    case ShaderResourceType::UNIFORM_BUFFER:
+
+        head += sizeof(ShaderResourceBuffer);
+        break;
+    }
+
+
+    ImageShaderResourceBarrier* imageBarrier = (ImageShaderResourceBarrier*)head;
+
+
+    imageBarrier[barrierIndex].imageType = ImageUsage::COLOR;
+    imageBarrier[barrierIndex].dstResourceLayout = dstLayout;
+    imageBarrier[barrierIndex].srcResourceLayout = oldLayout;
+
+    if (location)
+    {
+        imageBarrier[barrierIndex].dstAction = action;
+        imageBarrier[barrierIndex].dstStage = stage;
+    }
+    else {
+        imageBarrier[barrierIndex].srcAction = action;
+        imageBarrier[barrierIndex].srcStage = stage;
+    }
+}
+
+ShaderResourceHeader* GetConstantBuffer(int descriptorSet, int constantBuffer)
+{
+    uintptr_t head = descriptorSets[descriptorSet];
+    ShaderResourceSet* set = (ShaderResourceSet*)head;
+    uintptr_t* offsets = (uintptr_t*)(head + sizeof(ShaderResourceSet));
+
+    ShaderResourceHeader* ret = (ShaderResourceHeader*)(offsets[set->bindingCount - (constantBuffer + 1)]);
+
+    if (ret->type != ShaderResourceType::CONSTANT_BUFFER) return nullptr;
+
+    return ret;
+}
+
+int GetConstantBufferCount(int descriptorSet)
+{
+    uintptr_t head = descriptorSets[descriptorSet];
+    ShaderResourceSet* set = (ShaderResourceSet*)head;
+    uintptr_t* offsets = (uintptr_t*)(head + sizeof(ShaderResourceSet));
+
+    int iter = set->bindingCount - 1;
+
+    int count = 0;
+
+    while (iter >= 0)
+    {
+        ShaderResourceHeader* ret = (ShaderResourceHeader*)(offsets[iter--]);
+        if (ret->type == ShaderResourceType::CONSTANT_BUFFER) count++;
+        else break;
+    }
+
+    return count;
+}
+
+int GetBarrierCount(int descriptorSet)
+{
+    uintptr_t head = descriptorSets[descriptorSet];
+    ShaderResourceSet* set = (ShaderResourceSet*)head;
+    return set->barrierCount;
+}
+
+void UploadConstant(int descriptorset, void* data, int bufferLocation)
+{
+    ShaderResourceConstantBuffer* header = (ShaderResourceConstantBuffer*)GetConstantBuffer(descriptorset, bufferLocation);
+    if (!header) return;
+    header->data = data;
+}
+
+void UploadConstant(int descriptorset, int allocationIndex, int bufferLocation)
+{
+    ShaderResourceConstantBuffer* header = (ShaderResourceConstantBuffer*)GetConstantBuffer(descriptorset, bufferLocation);
+    if (!header) return;
+    header->allocationIndex = allocationIndex;
+}
+
+int AllocateShaderResourceSet(ShaderGraph* graph, uint32_t targetSet, int setCount)
+{
+    uintptr_t head = (uintptr_t)AllocateDSMemory + DSAllocator;
+
+    uintptr_t ptr = head;
+    ShaderResourceSet* set = (ShaderResourceSet*)ptr;
+    ptr += sizeof(ShaderResourceSet);
+
+    ShaderSetLayout* resourceSet = (ShaderSetLayout*)graph->GetSet(targetSet);
+
+    set->bindingCount = resourceSet->bindingCount;
+    set->layoutHandle = resourceSet->vulkanDescLayout;
+    set->setCount = setCount;
+    set->barrierCount = 0;
+
+    uintptr_t* offset = (uintptr_t*)ptr;
+
+    ptr += sizeof(uintptr_t) * (set->bindingCount);
+
+
+    int constantCount = set->bindingCount;
+    for (int h = 0; h < set->bindingCount; h++)
+    {
+        MemoryBarrierType memBarrierType = MemoryBarrierType::MEMORY_BARRIER;
+
+        ShaderResource* resource = (ShaderResource*)graph->GetResource(resourceSet->resourceStart + h);
+
+        if (resource->set != targetSet) continue;
+
+        ShaderResourceHeader* desc = (ShaderResourceHeader*)ptr;
+
+        if (resource->binding != ~0)
+            desc->binding = resource->binding;
+        else
+            desc->binding = --constantCount;
+
+        desc->type = resource->type;
+        desc->action = resource->action;
+        desc->arrayCount = resource->arrayCount;
+
+        offset[desc->binding] = ptr;
+
+        switch (resource->type)
+        {
+        case ShaderResourceType::SAMPLERSTATE:
+        {
+
+            ptr += sizeof(ShaderResourceSampler);
+            break;
+        }
+        case ShaderResourceType::IMAGESTORE2D:
+        {
+            ptr += sizeof(ShaderResourceImage);
+            memBarrierType = MemoryBarrierType::IMAGE_BARRIER;
+            if (resource->action == ShaderResourceAction::SHADERWRITE || resource->action == ShaderResourceAction::SHADERREADWRITE)
+            {
+                /*
+                ImageShaderResourceBarrier* barriers = (ImageShaderResourceBarrier*)ptr;
+                barriers->dstStage = ConvertShaderStageToBarrierStage(resource->stages);
+                barriers->dstAction = WRITE_SHADER_RESOURCE;
+                barriers->type = memBarrierType;
+
+                barriers[1].srcStage = ConvertShaderStageToBarrierStage(resource->stages);
+                barriers[1].srcAction = WRITE_SHADER_RESOURCE;
+                barriers[1].type = memBarrierType;
+
+                ptr += (sizeof(ImageShaderResourceBarrier) * 2);
+                set->barrierCount += 2;
+                */
+            }
+            break;
+        }
+        case ShaderResourceType::SAMPLER3D:
+        case ShaderResourceType::SAMPLER2D:
+        case ShaderResourceType::SAMPLERCUBE:
+        {
+            ptr += sizeof(ShaderResourceImage);
+            memBarrierType = MemoryBarrierType::IMAGE_BARRIER;
+            if (resource->action == ShaderResourceAction::SHADERWRITE || resource->action == ShaderResourceAction::SHADERREADWRITE)
+            {
+                /*
+                ImageShaderResourceBarrier* barriers = (ImageShaderResourceBarrier*)ptr;
+                barriers->srcStage = ConvertShaderStageToBarrierStage(resource->stages);
+                barriers->srcAction = WRITE_SHADER_RESOURCE;
+                barriers->type = memBarrierType;
+                ptr += (sizeof(ImageShaderResourceBarrier));
+                set->barrierCount++;
+                */
+            }
+            break;
+        }
+        case ShaderResourceType::SAMPLERBINDLESS:
+        {
+            memBarrierType = MemoryBarrierType::IMAGE_BARRIER;
+            memset((void*)ptr, 0, sizeof(ShaderResourceSamplerBindless));
+            ptr += sizeof(ShaderResourceSamplerBindless);
+            break;
+        }
+        case ShaderResourceType::CONSTANT_BUFFER:
+        {
+            ShaderResourceConstantBuffer* constants = (ShaderResourceConstantBuffer*)ptr;
+            constants->size = resource->size;
+            constants->offset = resource->offset;
+            constants->stage = resource->stages;
+            constants->data = NULL;
+            constants->allocationIndex = -1;
+            ptr += sizeof(ShaderResourceConstantBuffer);
+            break;
+        }
+        case ShaderResourceType::STORAGE_BUFFER:
+        case ShaderResourceType::UNIFORM_BUFFER:
+        {
+            memBarrierType = MemoryBarrierType::BUFFER_BARRIER;
+            ptr += sizeof(ShaderResourceBuffer);
+            if (resource->action == ShaderResourceAction::SHADERWRITE || resource->action == ShaderResourceAction::SHADERREADWRITE)
+            {
+                /*
+                ShaderResourceBarrier* barriers = (ShaderResourceBarrier*)ptr;
+                barriers->srcStage = ConvertShaderStageToBarrierStage(resource->stages);
+                barriers->srcAction = WRITE_SHADER_RESOURCE;
+                barriers->type = memBarrierType;
+                ptr += (sizeof(ShaderResourceBufferBarrier));
+                set->barrierCount++;
+                */
+            }
+            break;
+        }
+        case ShaderResourceType::BUFFER_VIEW:
+        {
+            memBarrierType = MemoryBarrierType::BUFFER_BARRIER;
+            ptr += sizeof(ShaderResourceBufferView);
+            if (resource->action == ShaderResourceAction::SHADERWRITE || resource->action == ShaderResourceAction::SHADERREADWRITE)
+            {
+                /*
+                ShaderResourceBarrier* barriers = (ShaderResourceBarrier*)ptr;
+                barriers->srcStage = ConvertShaderStageToBarrierStage(resource->stages);
+                barriers->srcAction = WRITE_SHADER_RESOURCE;
+                barriers->type = memBarrierType;
+                ptr += (sizeof(ShaderResourceBufferBarrier));
+                set->barrierCount++;
+                (*/
+            }
+            break;
+        }
+        }
+
+
+    }
+
+    DSAllocator += ptr - head;
+
+
+    int ret = DSIndex++;
+
+    descriptorSets[ret] = head;
+
+    return ret;
+}
 
 
 
@@ -954,11 +1471,6 @@ int AllocFromDeviceBuffer(size_t size, size_t alignment, int copies)
     return index;
 }
 
-DescriptorTypeUniformBuffer cameraBufferResource;
-DescriptorTypeConstantBuffer world1Resource, world2Resource;
-DescriptorTypeHeader sampler = { SAMPLER2D };
-DescriptorTypeImageSRV imageSrv = {};
-
 void DoSceneStuff()
 {
 
@@ -999,35 +1511,25 @@ void DoSceneStuff()
 
     WriteToImageDeviceLocalMemory(bgraImageMemoryPool, details.data, details.width, details.height, 4, details.dataSize, details.type, details.miplevels, 1);
 
-    cameraBufferResource.type = UNIFORMBUFFER;
-    cameraBufferResource.format = DXGI_FORMAT_UNKNOWN;
-    cameraBufferResource.allocationIndex = cameraData;
-    cameraBufferResource.numberOfElements = 1;
+    int camSRVDS = AllocateShaderResourceSet(mainLayout, 0, MAX_FRAMES_IN_FLIGHT);
+
+    BindBufferToShaderResource(camSRVDS, cameraData, 0, 0);
+    BindImageResourceToShaderResource(camSRVDS, bgraImageMemoryPool, 1);
+    BindSamplerResourceToShaderResource(camSRVDS, bgraImageMemoryPool, 2);
+
+    int worldOne = AllocateShaderResourceSet(mainLayout, 1, MAX_FRAMES_IN_FLIGHT);
+    UploadConstant(worldOne, world1Data, 0);
     
-    world1Resource.type = CONSTANTBUFFER;
-    world1Resource.allocationIndex = world1Data;
+    int worldTwo = AllocateShaderResourceSet(mainLayout, 1, MAX_FRAMES_IN_FLIGHT);
+    UploadConstant(worldTwo, world2Data, 0);
 
-    world2Resource.type = CONSTANTBUFFER;
-    world2Resource.allocationIndex = world2Data;
+    int basic1[2] = { camSRVDS, worldOne };
+    int basic2[2] = { camSRVDS, worldTwo };
 
-    imageSrv.type = IMAGESRV;
-    imageSrv.format = details.type;
-    imageSrv.image = bgraImageMemoryPool;
+   
 
-    DescriptorTypeHeader* types3[2] = { (DescriptorTypeHeader*)&cameraBufferResource, (DescriptorTypeHeader*)&imageSrv};
-
-    int camSRV = CreateDescriptorTable(types3, 2, MAX_FRAMES_IN_FLIGHT, &mainSRVDescriptorHeap);
-
-
-    DescriptorTypeHeader* types[1] = { (DescriptorTypeHeader*)&world1Resource  };
-
-    DescriptorTypeHeader* samplers[1] = { &sampler };
-
-    triangles[0].descriptorHeapPointer[0] = camSRV;
-    triangles[1].descriptorHeapPointer[0] = camSRV;
-    triangles[0].descriptorHeapPointer[1] = CreateDescriptorTable(types, 1, MAX_FRAMES_IN_FLIGHT, &mainSRVDescriptorHeap);
-    triangles[0].descriptorHeapPointer[2] = CreateDescriptorTable(samplers, 1, MAX_FRAMES_IN_FLIGHT, &mainSamplerDescriptorHeap);
-    triangles[1].descriptorHeapPointer[2] = triangles[0].descriptorHeapPointer[2];
+    CreateTablesFromResourceSet(basic1, 2, &triangles[0]);
+    CreateTablesFromResourceSet(basic2, 2, &triangles[1]);
     
     triangles[0].topology = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
     triangles[0].heapsCount = 2;
@@ -1036,17 +1538,8 @@ void DoSceneStuff()
     triangles[0].indexCount = 36;
     triangles[0].descriptorHeap[0] = mainSRVDescriptorHeap.descriptorHeap;
     triangles[0].descriptorHeap[1] = mainSamplerDescriptorHeap.descriptorHeap;
-    triangles[0].resourceCount[0] = 2;
-    triangles[0].resourceCount[1] = 1;
-    triangles[0].resourceCount[2] = 1;
-    triangles[0].descriptorHeapSelection[0] = 0;
-    triangles[0].descriptorHeapSelection[1] = 0;
-    triangles[0].descriptorHeapSelection[2] = 1;
 
     triangles[0].descriptorTableCount = 3;
-    triangles[0].descriptorRootParameterIndices[0] = 0;
-    triangles[0].descriptorRootParameterIndices[1] = 1;
-    triangles[0].descriptorRootParameterIndices[2] = 2;
 
     triangles[1].topology = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
     triangles[1].heapsCount = 2;
@@ -1055,25 +1548,11 @@ void DoSceneStuff()
     triangles[1].indexCount = 36;
     triangles[1].descriptorHeap[0] = mainSRVDescriptorHeap.descriptorHeap;
     triangles[1].descriptorHeap[1] = mainSamplerDescriptorHeap.descriptorHeap;
-    triangles[1].descriptorHeapSelection[0] = 0;
-    triangles[1].descriptorHeapSelection[1] = 0;
-    triangles[1].descriptorHeapSelection[2] = 1;
-    triangles[1].resourceCount[0] = 2;
-    triangles[1].resourceCount[1] = 1;
-    triangles[1].resourceCount[2] = 1;
+
     triangles[1].pipelineState = triangles[0].pipelineState;
     triangles[1].rootSignature = triangles[0].rootSignature;
 
     triangles[1].descriptorTableCount = 3;
-
-    triangles[1].descriptorRootParameterIndices[0] = 0;
-    triangles[1].descriptorRootParameterIndices[1] = 1;
-    triangles[1].descriptorRootParameterIndices[2] = 2;
-
-    DescriptorTypeHeader* types2[1] = { (DescriptorTypeHeader*)&world2Resource };
-
-    triangles[1].descriptorHeapPointer[1] = CreateDescriptorTable(types2, 1, MAX_FRAMES_IN_FLIGHT, &mainSRVDescriptorHeap);
-
 
     triangles[0].indexBuffer = deviceLocalBuffer.bufferHandle;
     triangles[1].indexBuffer = deviceLocalBuffer.bufferHandle;
@@ -2144,10 +2623,7 @@ int Render()
             int heapindex = triangles[i].descriptorHeapSelection[j];
             int step = (heapindex == 0 ? mainSRVDescriptorHeap.descriptorHeapHandleSize : mainSamplerDescriptorHeap.descriptorHeapHandleSize);
             CD3DX12_GPU_DESCRIPTOR_HANDLE handle = CD3DX12_GPU_DESCRIPTOR_HANDLE(triangles[i].descriptorHeap[heapindex]->GetGPUDescriptorHandleForHeapStart(), triangles[i].descriptorHeapPointer[j] + (currentFrame * triangles[i].resourceCount[j]), step);
-      
-            
-            
-            graphicCommandBuffer->SetGraphicsRootDescriptorTable(triangles[i].descriptorRootParameterIndices[j], handle);
+            graphicCommandBuffer->SetGraphicsRootDescriptorTable(j, handle);
         }
 
 
@@ -3395,8 +3871,11 @@ int ShaderGraphReader::HandleShaderResourceItem(char* fileData, int currentLocat
                 tag->resourceType = ShaderResourceType::SAMPLER2D;
                 tag->resourceAction = ShaderResourceAction::SHADERREAD;
                 break;
-            case hash("storageimage"):
+            case hash("image2D"):
                 tag->resourceType = ShaderResourceType::IMAGESTORE2D;
+                break;
+            case hash("sampler"):
+                tag->resourceType = ShaderResourceType::SAMPLERSTATE;
                 break;
             case hash("storage"):
                 tag->resourceType = ShaderResourceType::STORAGE_BUFFER;
@@ -3562,6 +4041,8 @@ ID3D12RootSignature* CreateRootSignatureFromShaderGraph(ShaderGraph* graph)
     UINT numDescriptorsTables = graph->resourceSetCount, numRootParameters = graph->resourceSetCount, numOfRanges = graph->resourceCount;
 
     UINT samplerCount = 0;
+
+    
   
     for (int i = 0; i < graph->resourceCount; i++)
     {
@@ -3572,20 +4053,28 @@ ID3D12RootSignature* CreateRootSignatureFromShaderGraph(ShaderGraph* graph)
         case ShaderResourceType::UNIFORM_BUFFER:
 
             break;
-        case ShaderResourceType::SAMPLER2D:
-            numDescriptorsTables++;
-            numRootParameters++;
-            numOfRanges++;
+        case ShaderResourceType::SAMPLERSTATE:
+           
             samplerCount++;
             break;
 
         case ShaderResourceType::CONSTANT_BUFFER:
            
             break;
+        case ShaderResourceType::IMAGESTORE2D:
+
+            break;
         }
     }
 
+    if (samplerCount)
+    {
+        numDescriptorsTables++;
+        numRootParameters++;
+    }
 
+    UINT* rangeCount = (UINT*)AllocFromTemp(sizeof(UINT) * numRootParameters, 4);
+    memset(rangeCount, 0, sizeof(UINT) * numRootParameters);
     CD3DX12_DESCRIPTOR_RANGE* ranges = (CD3DX12_DESCRIPTOR_RANGE*)AllocFromTemp(sizeof(CD3DX12_DESCRIPTOR_RANGE) * numOfRanges, 4);
     ShaderStageType* visibility = (ShaderStageType*)AllocFromTemp(sizeof(ShaderStageType) * numRootParameters, 4);
 
@@ -3596,7 +4085,7 @@ ID3D12RootSignature* CreateRootSignatureFromShaderGraph(ShaderGraph* graph)
     for (int i = 0; i < graph->resourceCount; i++)
     {
         ShaderResource* resource = (ShaderResource*)graph->GetResource(i);
-        
+
         switch (resource->type)
         {
         case ShaderResourceType::CONSTANT_BUFFER:
@@ -3604,30 +4093,37 @@ ID3D12RootSignature* CreateRootSignatureFromShaderGraph(ShaderGraph* graph)
             CD3DX12_DESCRIPTOR_RANGE* range = &ranges[rangeParameterIndex++];
             range->Init(D3D12_DESCRIPTOR_RANGE_TYPE_CBV, 1, cbvIndex++);
             visibility[resource->set] |= resource->stages;
+            rangeCount[resource->set] += 1;
             break;
         }
-        case ShaderResourceType::SAMPLER2D:
+        case ShaderResourceType::IMAGESTORE2D:
         {
-            CD3DX12_DESCRIPTOR_RANGE* range = &ranges[samplerRangeParameterIndex++];
-            range->Init(D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER, 1, samplerIndex++);
-            range = &ranges[rangeParameterIndex++];
+            CD3DX12_DESCRIPTOR_RANGE* range = &ranges[rangeParameterIndex++];
             range->Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, srvIndex++);
 
        
-
+            rangeCount[resource->set] += 1;
        
             visibility[resource->set] |= resource->stages;
-            visibility[numRootParameters - 1] |= resource->stages;
-
+           
             break;
 
+        }
+
+        case ShaderResourceType::SAMPLERSTATE:
+        {
+            CD3DX12_DESCRIPTOR_RANGE* range = &ranges[samplerRangeParameterIndex++];
+            range->Init(D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER, 1, samplerIndex++);
+            visibility[numRootParameters - 1] |= resource->stages;
+            rangeCount[numRootParameters - 1] += 1;
+            break;
         }
         case ShaderResourceType::UNIFORM_BUFFER:
         {
             CD3DX12_DESCRIPTOR_RANGE* range = &ranges[rangeParameterIndex++];
             range->Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, srvIndex++);
 
-           
+            rangeCount[resource->set] += 1;
             visibility[resource->set] |= resource->stages;
             break;
         }
@@ -3663,11 +4159,11 @@ ID3D12RootSignature* CreateRootSignatureFromShaderGraph(ShaderGraph* graph)
             }
         }
 
-        rootParameters[rootParamIndex].InitAsDescriptorTable(layout->bindingCount, ranges + rangeIterIndex, visible);
+        rootParameters[rootParamIndex].InitAsDescriptorTable(rangeCount[i], ranges + rangeIterIndex, visible);
 
         rootParamIndex++;
 
-        rangeIterIndex += layout->bindingCount;
+        rangeIterIndex += rangeCount[i];
     }
 
     if (samplerCount)
@@ -3692,7 +4188,7 @@ ID3D12RootSignature* CreateRootSignatureFromShaderGraph(ShaderGraph* graph)
             }
         }
 
-        rootParameters[numRootParameters - 1].InitAsDescriptorTable(samplerCount, ranges + graph->resourceCount, visible);
+        rootParameters[numRootParameters - 1].InitAsDescriptorTable(samplerCount, ranges + rangeIterIndex, visible);
     }
    
     ID3D12RootSignature* rootSignature = CreateRootSignature(deviceHandle, rootParameters, numRootParameters, D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
@@ -3708,29 +4204,35 @@ void CreateDescriptorHeapManager(DescriptorHeap* heap, UINT maxDescriptorHandles
     heap->type = type;
 }
 
-int CreateDescriptorTable(DescriptorTypeHeader** header, int descriptorCount, int frameCount, DescriptorHeap* heap)
+int CreateDescriptorTable(uintptr_t header, int descriptorCount, int frameCount, DescriptorHeap* heap)
 {
     int heapstart = heap->descriptorHeapHandlePointer;
     for (int i = 0; i < frameCount; i++)
     {
+        uintptr_t ptr = header;
         for (int j = 0; j < descriptorCount; j++)
         {
-            switch (header[j]->type)
+
+
+            DescriptorTypeHeader* header = (DescriptorTypeHeader*)ptr;
+            switch (header->type)
             {
             case PUSHCONSTANTS:
                 break;
             case CONSTANTBUFFER:
             {
-                DescriptorTypeConstantBuffer* cbType = (DescriptorTypeConstantBuffer*)header[j];
+                DescriptorTypeConstantBuffer* cbType = (DescriptorTypeConstantBuffer*)header;
 
                 Allocation* alloc = &allocationHandle[cbType->allocationIndex];
 
                 CreateCBVDescriptorHandle(deviceHandle, alloc->bufferHandle, i * alloc->stridesize + alloc->offset, alloc->stridesize , heap);
+
+                ptr += sizeof(DescriptorTypeConstantBuffer);
                 break;
             }
             case UNIFORMBUFFER:
             {
-                DescriptorTypeUniformBuffer* ubType = (DescriptorTypeUniformBuffer*)header[j];
+                DescriptorTypeUniformBuffer* ubType = (DescriptorTypeUniformBuffer*)header;
 
                 Allocation* alloc = &allocationHandle[ubType->allocationIndex];
                 CreateSRVDescriptorHandle(deviceHandle,
@@ -3740,12 +4242,14 @@ int CreateDescriptorTable(DescriptorTypeHeader** header, int descriptorCount, in
                     heap,
                     D3D12_SRV_DIMENSION_BUFFER
                 );
+
+                ptr += sizeof(DescriptorTypeUniformBuffer);
                 break;
             }
 
             case IMAGESRV:
             {
-                DescriptorTypeImageSRV* ubType = (DescriptorTypeImageSRV*)header[j];
+                DescriptorTypeImageSRV* ubType = (DescriptorTypeImageSRV*)header;
 
      
                 CreateImageSRVDescriptorHandle(deviceHandle,
@@ -3755,10 +4259,14 @@ int CreateDescriptorTable(DescriptorTypeHeader** header, int descriptorCount, in
                     heap,
                     D3D12_SRV_DIMENSION_TEXTURE2D
                 );
+
+                ptr += sizeof(DescriptorTypeImageSRV);
+
                 break;
             }
-            case SAMPLER2D:
-                CreateImageSampler(deviceHandle, &mainSamplerDescriptorHeap);
+            case SAMPLERSTATE:
+                CreateImageSampler(deviceHandle, heap);
+                ptr += sizeof(DescriptorTypeImageSRV);
                 break;
             }
         }
@@ -3883,7 +4391,137 @@ void ParseBMP(TextureDetails* details, const char* name)
 
     memcpy(copy, iter2, bytesPerRow);
 
-    //TexUtils::BGRATexture((char*)details->data, height, width, (bitcount == 24 ? 3 : 4));
     details->miplevels = 1;
 }
 
+void CreateTablesFromResourceSet(int* descriptorsets, int numDescriptorSet, PipelineObject* obj)
+{
+    int samplerCount = 0;
+
+    uintptr_t dx12Sampler = (uintptr_t)AllocFromTemp(512, 4);
+    uintptr_t dx12SamplerPtr = dx12Sampler;
+
+    for (int i = 0; i < numDescriptorSet; i++)
+    {
+        
+        uintptr_t head = descriptorSets[descriptorsets[i]];
+
+
+
+        ShaderResourceSet* set = (ShaderResourceSet*)head;
+        uintptr_t* offsets = (uintptr_t*)(head + sizeof(ShaderResourceSet));
+        int count = set->bindingCount;
+
+
+        uintptr_t dx12Descriptions = (uintptr_t)AllocFromTemp(512, 4);
+        uintptr_t dx12Ptr = dx12Descriptions;
+
+        int currentTableCount = 0;
+
+        for (int i = 0; i < count; i++)
+        {
+            ShaderResourceHeader* header = (ShaderResourceHeader*)offsets[i];
+
+            switch (header->type)
+            {
+            case ShaderResourceType::IMAGESTORE2D:
+            {
+                ShaderResourceImage* image = (ShaderResourceImage*)header;
+                DescriptorTypeImageSRV* srv = (DescriptorTypeImageSRV*)dx12Ptr;
+                srv->type = IMAGESRV;
+                srv->format = DXGI_FORMAT_B8G8R8A8_UNORM_SRGB;
+                srv->image = bgraImageMemoryPool;
+
+                dx12Ptr += sizeof(DescriptorTypeImageSRV);
+                currentTableCount++;
+                break;
+            }
+            case ShaderResourceType::SAMPLERSTATE:
+            {
+                ShaderResourceSampler* image = (ShaderResourceSampler*)header;
+                samplerCount++;
+                DescriptorTypeHeader* header = (DescriptorTypeHeader*)dx12SamplerPtr;
+                header->type = SAMPLERSTATE;
+                dx12SamplerPtr += sizeof(DescriptorTypeHeader);
+                break;
+            }
+
+            case ShaderResourceType::SAMPLER3D:
+            case ShaderResourceType::SAMPLER2D:
+            case ShaderResourceType::SAMPLERCUBE:
+            {
+                ShaderResourceImage* image = (ShaderResourceImage*)header;
+
+                break;
+            }
+            case ShaderResourceType::CONSTANT_BUFFER:
+            {
+                ShaderResourceConstantBuffer* buffer = (ShaderResourceConstantBuffer*)header;
+
+                DescriptorTypeConstantBuffer* cbv = (DescriptorTypeConstantBuffer*)dx12Ptr;
+                cbv->type = CONSTANTBUFFER;
+                cbv->allocationIndex = buffer->allocationIndex;
+
+                dx12Ptr += sizeof(DescriptorTypeConstantBuffer);
+                currentTableCount++;
+                break;
+            }
+
+            case ShaderResourceType::STORAGE_BUFFER:
+            {
+                ShaderResourceBuffer* buffer = (ShaderResourceBuffer*)header;
+                auto alloc = allocationHandle[buffer->allocation];
+
+                break;
+            }
+            case ShaderResourceType::UNIFORM_BUFFER:
+            {
+                ShaderResourceBuffer* buffer = (ShaderResourceBuffer*)header;
+                DescriptorTypeUniformBuffer* ubv = (DescriptorTypeUniformBuffer*)dx12Ptr;
+                ubv->type = UNIFORMBUFFER;
+                ubv->allocationIndex = buffer->allocation;
+                ubv->format = DXGI_FORMAT_UNKNOWN;
+                ubv->numberOfElements = 1;
+                dx12Ptr += sizeof(DescriptorTypeUniformBuffer);
+                currentTableCount++;
+                break;
+            }
+
+            case ShaderResourceType::SAMPLERBINDLESS:
+            {
+                ShaderResourceSamplerBindless* samplers = (ShaderResourceSamplerBindless*)header;
+                break;
+            }
+
+
+            case ShaderResourceType::BUFFER_VIEW:
+            {
+                ShaderResourceBufferView* bufferView = (ShaderResourceBufferView*)header;
+
+                break;
+            }
+            }
+        }
+
+        if (srvDescriptorTablesStart[descriptorsets[i]] != -1)
+        {
+            obj->descriptorHeapPointer[i] = srvDescriptorTablesStart[descriptorsets[i]];
+        }
+        else 
+        {
+            obj->descriptorHeapPointer[i] = CreateDescriptorTable(dx12Descriptions, currentTableCount, MAX_FRAMES_IN_FLIGHT, &mainSRVDescriptorHeap);
+            srvDescriptorTablesStart[descriptorsets[i]] = obj->descriptorHeapPointer[i];
+        }
+
+        obj->resourceCount[i] = currentTableCount;
+        obj->descriptorHeapSelection[i] = 0;
+        
+    }
+
+    if (samplerCount)
+    {
+        obj->descriptorHeapPointer[numDescriptorSet] = CreateDescriptorTable(dx12Sampler, samplerCount, MAX_FRAMES_IN_FLIGHT, &mainSamplerDescriptorHeap);
+        obj->resourceCount[numDescriptorSet] = samplerCount;
+        obj->descriptorHeapSelection[numDescriptorSet] = 1;
+    }
+}
