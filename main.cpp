@@ -3,438 +3,11 @@
 #include <Windows.h>
 #include <string>
 #include <array>
+#include "Types.h"
+#include "Files.h"
 
-struct OSFileHandle
-{
-    unsigned int fileLength;
-    int filePointer;
-    int osDataHandle;
 
-    OSFileHandle()
-    {
-        fileLength = -1;
-        filePointer = -1;
-        osDataHandle = -1;
-    }
-};
 
-enum OSFileFlags
-{
-    READ = 1,
-    WRITE = 2,
-    CREATE = 4,
-};
-
-enum OSRelativeFlags
-{
-    BEGIN = 0,
-    CURRENT = 1,
-    END = 2,
-};
-
-enum OSFileErrorFlags
-{
-    OS_SUCCESS = 0,
-    OS_FAILED_CREATE = -1,
-    OS_FAILED_SIZE = -2,
-    OS_INVALID_ARGUMENT = -3,
-    OS_FAILED_SEEK = -4,
-    OS_FAILED_READ = -5,
-    OS_FAILED_WRITE = -6,
-    OS_FAILED_SEARCH_ITER = -7,
-    OS_REACH_ITER_END = -8
-};
-
-struct OSFileIterator
-{
-    char currentFileName[250];
-    int osDataHandle;
-
-    OSFileIterator()
-    {
-        osDataHandle = -1;
-    }
-};
-
-int OSCreateFile(const char* filename, OSFileFlags flags, OSFileHandle* fileHandle);
-
-int OSOpenFile(const char* filename, OSFileFlags flags, OSFileHandle* fileHandle);
-
-int OSCloseFile(OSFileHandle* fileHandle);
-
-int OSReadFile(OSFileHandle* fileHandle, int size, char* buffer);
-
-int OSSeekFile(OSFileHandle* fileHandle, int pointer, OSRelativeFlags flags);
-
-int OSWriteFile(OSFileHandle* fileHandle, int size, char* buffer);
-
-int OSCreateFileIterator(const char* searchString, OSFileIterator* iterator);
-
-int OSNextFile(OSFileIterator* iterator);
-
-
-#include <atomic>
-
-static HANDLE intFileHandles[50];
-static std::atomic<int> intFileHandleCounter;
-
-static DWORD ConvertOSFlags(OSFileFlags flags, DWORD* shareMode)
-{
-    DWORD outflags = 0;
-    if (flags & READ) {
-        outflags |= GENERIC_READ;
-        *shareMode |= FILE_SHARE_READ;
-    }
-
-    if (flags & WRITE) {
-        outflags |= GENERIC_WRITE;
-        *shareMode |= FILE_SHARE_WRITE;
-    }
-
-    return outflags;
-}
-
-int OSCreateFile(const char* filename, OSFileFlags flags, OSFileHandle* fileHandle)
-{
-    HANDLE hFile;
-    DWORD fileShare = 0;
-    DWORD hAccess = ConvertOSFlags(flags, &fileShare);
-
-
-
-    hFile = CreateFileA(filename, hAccess, fileShare, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
-
-    if (hFile == INVALID_HANDLE_VALUE)
-    {
-        return OS_FAILED_CREATE;
-    }
-
-    fileHandle->fileLength = 0;
-    fileHandle->filePointer = 0;
-
-    int internalHandlePtr = intFileHandleCounter.fetch_add(1);
-    intFileHandles[internalHandlePtr] = hFile;
-
-    fileHandle->osDataHandle = internalHandlePtr;
-
-    return OS_SUCCESS;
-
-}
-
-int OSOpenFile(const char* filename, OSFileFlags flags, OSFileHandle* fileHandle)
-{
-    HANDLE hFile = INVALID_HANDLE_VALUE;
-    DWORD fileShare = 0;
-    DWORD hAccess = ConvertOSFlags(flags, &fileShare);
-
-    hFile = CreateFileA(filename, hAccess, fileShare, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-
-    if (hFile == INVALID_HANDLE_VALUE)
-    {
-        return OS_FAILED_CREATE;
-    }
-
-    DWORD fileSize = GetFileSize(hFile, NULL);
-
-    if (fileSize == INVALID_FILE_SIZE)
-    {
-        CloseHandle(hFile);
-        return OS_FAILED_SIZE;
-    }
-
-    fileHandle->fileLength = fileSize;
-    fileHandle->filePointer = 0;
-
-    int internalHandlePtr = intFileHandleCounter.fetch_add(1);
-    intFileHandles[internalHandlePtr] = hFile;
-
-    fileHandle->osDataHandle = internalHandlePtr;
-
-    return OS_SUCCESS;
-}
-
-int OSCloseFile(OSFileHandle* fileHandle)
-{
-    HANDLE hFile = intFileHandles[fileHandle->osDataHandle];
-    CloseHandle(hFile);
-    intFileHandles[fileHandle->osDataHandle] = INVALID_HANDLE_VALUE;
-    memset(fileHandle, -1, sizeof(OSFileHandle));
-    return OS_SUCCESS;
-}
-
-int OSReadFile(OSFileHandle* fileHandle, int size, char* buffer)
-{
-    HANDLE hFile = intFileHandles[fileHandle->osDataHandle];
-
-    DWORD hBytesRead = 0;
-
-    if (ReadFile(hFile, buffer, size, &hBytesRead, NULL) == FALSE)
-    {
-        return OS_FAILED_READ;
-    }
-
-    fileHandle->filePointer += hBytesRead;
-
-    return hBytesRead;
-}
-
-int OSWriteFile(OSFileHandle* fileHandle, int size, char* buffer)
-{
-    HANDLE hFile = intFileHandles[fileHandle->osDataHandle];
-
-    DWORD hBytesWrite = 0;
-
-    if (WriteFile(hFile, buffer, size, &hBytesWrite, NULL) == FALSE)
-    {
-        return OS_FAILED_WRITE;
-    }
-
-    fileHandle->filePointer += hBytesWrite;
-
-    return hBytesWrite;
-}
-
-int OSSeekFile(OSFileHandle* fileHandle, int pointer, OSRelativeFlags flags)
-{
-
-    HANDLE hFile = intFileHandles[fileHandle->osDataHandle];
-
-    int currentPointer = fileHandle->filePointer;
-
-    DWORD moveMethod = FILE_BEGIN;
-
-    switch (flags)
-    {
-    case BEGIN:
-        currentPointer = pointer;
-        break;
-    case CURRENT:
-        moveMethod = FILE_CURRENT;
-        currentPointer += pointer;
-        break;
-    case END:
-        moveMethod = FILE_END;
-        currentPointer = fileHandle->fileLength;
-        break;
-    default:
-        return OS_INVALID_ARGUMENT;
-    }
-
-    DWORD nRet = SetFilePointer(hFile, pointer, NULL, moveMethod);
-
-    if (nRet == INVALID_SET_FILE_POINTER)
-    {
-        return OS_FAILED_SEEK;
-    }
-
-    fileHandle->filePointer = currentPointer;
-
-    return OS_SUCCESS;
-}
-
-int OSCreateFileIterator(const char* searchString, OSFileIterator* iterator)
-{
-    if (!searchString || !iterator) return OS_INVALID_ARGUMENT;
-
-    int index = intFileHandleCounter.fetch_add(1);
-
-    WIN32_FIND_DATAA data;
-
-    HANDLE searchIdx = FindFirstFileA(searchString, &data);
-
-    if (searchIdx == INVALID_HANDLE_VALUE)
-    {
-        return OS_FAILED_SEARCH_ITER;
-    }
-
-    intFileHandles[index] = searchIdx;
-
-    strncpy(iterator->currentFileName, data.cFileName, 250);
-    iterator->osDataHandle = index;
-
-    return 0;
-}
-
-int OSNextFile(OSFileIterator* iterator)
-{
-    if (!iterator) return OS_INVALID_ARGUMENT;
-
-    int index = iterator->osDataHandle;
-
-    WIN32_FIND_DATAA data;
-
-    BOOL ret = FindNextFileA(intFileHandles[index], &data);
-
-    if (!ret)
-    {
-        CloseHandle(intFileHandles[index]);
-        return OS_REACH_ITER_END;
-    }
-
-    strncpy(iterator->currentFileName, data.cFileName, 250);
-
-    return 0;
-}
-
-enum class ShaderResourceType
-{
-    SAMPLER2D = 1,
-    STORAGE_BUFFER = 2,
-    UNIFORM_BUFFER = 4,
-    CONSTANT_BUFFER = 8,
-    IMAGESTORE2D = 16,
-    IMAGESTORE3D = 32,
-    SAMPLERBINDLESS = 64,
-    BUFFER_VIEW = 128,
-    SAMPLER3D = 129,
-    SAMPLERCUBE = 130,
-    SAMPLERSTATE = 131,
-    INVALID_SHADER_RESOURCE = 0x7FFFFFFF
-};
-
-enum class ShaderResourceAction
-{
-    SHADERREAD = 1,
-    SHADERWRITE = 2,
-    SHADERREADWRITE = 3
-};
-
-enum ShaderStageTypeBits
-{
-    VERTEXSHADERSTAGE = 1,
-    FRAGMENTSHADERSTAGE = 2,
-    COMPUTESHADERSTAGE = 4,
-};
-
-typedef int ShaderStageType;
-
-
-struct ShaderSetLayout
-{
-    int vulkanDescLayout;
-    int bindingCount;
-    int resourceStart;
-};
-
-struct ShaderResource
-{
-    ShaderStageType stages;
-    ShaderResourceAction action;
-    ShaderResourceType type;
-    int set;
-    int binding;
-    int arrayCount;
-    int size;
-    int offset;
-};
-
-struct ShaderResourceSet
-{
-    int bindingCount;
-    int layoutHandle;
-    int setCount;
-    int barrierCount;
-};
-
-struct ShaderResourceHeader
-{
-    ShaderResourceType type;
-    ShaderResourceAction action;
-    int binding;
-    int arrayCount;
-};
-
-struct ShaderMap
-{
-    ShaderStageType type;
-    int shaderReference;
-    int GetMapSize() const;
-};
-
-struct ShaderGraph
-{
-    int shaderMapCount;
-    int resourceSetCount;
-    int resourceCount;
-
-    uintptr_t GetSet(int setIndex);
-
-    uintptr_t GetResource(int resourceIndex);
-
-    uintptr_t GetMap(int mapIndex);
-
-    int GetGraphSize() const;
-};
-
-struct ShaderComputeLayout
-{
-    unsigned long x;
-    unsigned long y;
-    unsigned long z;
-};
-
-struct ShaderGraphReader
-{
-    struct ShaderXMLTag
-    {
-        unsigned long hashCode;
-    };
-
-    struct ShaderGLSLShaderXMLTag : ShaderXMLTag //followed by shaderNameLen Bytes
-    {
-        ShaderStageType type;
-    };
-
-    struct ShaderComputeLayoutXMLTag : ShaderXMLTag
-    {
-        ShaderComputeLayout comps;
-    };
-
-    struct ShaderResourceItemXMLTag : ShaderXMLTag
-    {
-        ShaderStageType shaderstage;
-        ShaderResourceType resourceType;
-        ShaderResourceAction resourceAction;
-        int arrayCount;
-        int size;
-        int offset;
-    };
-
-    struct ShaderResourceSetXMLTag : ShaderXMLTag
-    {
-        int resourceCount;
-    };
-
-    static constexpr unsigned long
-        hash(char* str);
-
-    static constexpr unsigned long
-        hash(const std::string& string);
-
-
-    static ShaderGraph* CreateShaderGraph(const std::string& filename);
-
-    static int ProcessTag(char* fileData, int currentLocation, unsigned long* hash, bool* opening);
-
-    static int SkipLine(char* fileData, int currentLocation);
-    static int ReadValue(char* fileData, int currentLocation, char* str, int* len);
-
-    static int ReadAttributeName(char* fileData, int currentLocation, unsigned long* hash);
-
-    static int ReadAttributeValueHash(char* fileData, int currentLocation, unsigned long* hash);
-
-    static int ReadAttributeValueVal(char* fileData, int currentLocation, unsigned long* val);
-
-    static int ReadAttributes(char* fileData, int currentLocation, unsigned long* hashes, int* stackSize, int valType);
-
-    static int HandleGLSLShader(char* fileData, int currentLocation, uintptr_t* offset, void* shaderData, int* shaderDataSize);
-
-    static int HandleShaderResourceItem(char* fileData, int currentLocation, uintptr_t* offset);
-
-    static constexpr int ASCIIToInt(char* str);
-
-    static int HandleComputeLayout(char* fileData, int currentLocation, uintptr_t* offset);
-};
 
 
 
@@ -484,36 +57,6 @@ void* AllocFromTemp(size_t size, size_t alignment)
 
     return (void*)&tempGlobalMemoryPool[current];
 }
-
-
-enum class ComponentFormatType
-{
-    NO_BUFFER_FORMAT = 0,
-    RAW_8BIT_BUFFER = 1,
-    R32_UINT = 2,
-    R32_SINT = 3,
-    R32G32B32A32_SFLOAT = 4,
-    R32G32B32_SFLOAT = 5,
-    R32G32_SFLOAT = 6,
-    R32_SFLOAT = 7,
-    R32G32_SINT = 8,
-    R8G8_UINT = 9,
-    R16G16_SINT = 10,
-    R16G16B16_SINT = 11
-
-};
-
-enum class VertexUsage
-{
-    POSITION = 0,
-    TEX0 = 1,
-    TEX1 = 2,
-    TEX2 = 3,
-    TEX3 = 4,
-    NORMAL = 5,
-    BONES = 6,
-    WEIGHTS = 7
-};
 
 struct VertexInputDescription
 {
@@ -696,6 +239,21 @@ struct DriverMemoryBuffer
 };
 
 
+struct TextureMemoryPool
+{
+    ID3D12Heap* heap;
+    size_t currentPointer;
+    size_t sizeOfHeap;
+    size_t alignment;
+};
+
+TextureMemoryPool bgraPool;
+
+TextureMemoryPool rsvdsvPool;
+
+void CreateTextureMemoryPool(TextureMemoryPool* pool, size_t sizeOfPool, size_t alignment);
+void CreateDSVRSVMemoryPool(TextureMemoryPool* pool, size_t sizeOfPool, size_t alignment, bool msaa);
+
 void ParseBMP(TextureDetails* details, const char* name);
 
 ID3D12CommandQueue* CreateCommandQueue(ID3D12Device2* device, D3D12_COMMAND_LIST_TYPE type);
@@ -716,17 +274,24 @@ ID3D12CommandAllocator* CreateCommandAllocator(ID3D12Device2* device, D3D12_COMM
 int CreateRenderTargetView(ID3D12Device2* device, IDXGISwapChain4* swapChain, ID3D12DescriptorHeap* descriptorHeap, ID3D12Resource** outBuffers, UINT rtvDescriptorSize);
 ID3D12DescriptorHeap* CreateDescriptorHeap(ID3D12Device2* device, D3D12_DESCRIPTOR_HEAP_TYPE type, int numDescriptors, D3D12_DESCRIPTOR_HEAP_FLAGS flags, UINT* descriptorSize);
 void ReleaseD3D12Resources();
-int CreateDepthStencilView(ID3D12Device2* device, ID3D12DescriptorHeap* descriptorHeap, ID3D12Resource** outBuffers, UINT dsvDescriptorSize);
+int CreateDepthStencilView(ID3D12Device2* device, ID3D12DescriptorHeap* descriptorHeap, TextureMemoryPool* pool, ID3D12Resource** outBuffers, UINT dsvDescriptorSize);
 ID3DBlob* CreateShaderBlob(const char* shaderfile);
 void CreateHostBuffer(DriverMemoryBuffer* dmb, UINT size, D3D12_RESOURCE_FLAGS flags);
 ID3D12Resource* CreateDeviceLocalBuffer(ID3D12Device2* device, UINT size, D3D12_RESOURCE_FLAGS flags);
 void WriteToHostMemory(int allocationIndex, void* data, size_t size, size_t offset, int copies);
 void WriteToDeviceLocalMemory(int allocationIndex, void* data, size_t size, size_t offset, int copies);
 
-ID3D12Resource* CreateImageResource(ID3D12Device2* device, UINT width, UINT height, UINT depth, UINT mips, D3D12_RESOURCE_FLAGS flags, DXGI_FORMAT format, D3D12_RESOURCE_DIMENSION dimension);
+ID3D12Resource* CreateCommittedImageResource(ID3D12Device2* device, UINT width, UINT height, UINT depth, UINT mips, D3D12_RESOURCE_FLAGS flags, DXGI_FORMAT format, D3D12_RESOURCE_DIMENSION dimension);
+
+ID3D12Resource* CreatePlacedImageResource(ID3D12Device2* device, TextureMemoryPool* pool, UINT width, UINT height, UINT depth, UINT mips, D3D12_RESOURCE_FLAGS flags, DXGI_FORMAT format, D3D12_RESOURCE_DIMENSION dimension);
+
+
+
+
 void WriteToImageDeviceLocalMemory(ID3D12Resource* imageHandle, char* data, UINT width, UINT height, UINT componentCount, UINT totalImageSize, DXGI_FORMAT format, UINT mipLevels, UINT layers);
 void TransitionBufferBarrier(ID3D12GraphicsCommandList7* cmdBuffer, ID3D12Resource* resource, D3D12_BARRIER_SYNC srcSync, D3D12_BARRIER_ACCESS srcAccess, D3D12_BARRIER_SYNC dstSync, D3D12_BARRIER_ACCESS dstAccess);
 ID3D12RootSignature* CreateRootSignatureFromShaderGraph(ShaderGraph* graph);
+ID3D12Heap* CreateDX12Heap(SIZE_T size, SIZE_T alignment, D3D12_HEAP_FLAGS heapFlags, D3D12_HEAP_TYPE heapType);
 struct Camera
 {
     XMMATRIX proj;
@@ -787,6 +352,8 @@ DriverMemoryBuffer hostBuffer{};
 DriverMemoryBuffer deviceLocalBuffer{};
 
 DriverMemoryBuffer stagingBuffers[MAX_FRAMES_IN_FLIGHT]{};
+
+
 
 struct DescriptorHeap
 {
@@ -905,528 +472,6 @@ static XMVECTOR BoxVerts[48] =
     XMVectorSet(1.0f, -1.0f, -1.0f, 1.0f), XMVectorSet(1.0f, 1.0f, 1.0f, 0.0f)
 };
 
-
-enum class ImageLayout
-{
-    UNDEFINED = 0,
-    WRITEABLE = 1,
-    SHADERREADABLE = 2,
-    COLORATTACHMENT = 3,
-    DEPTHSTENCILATTACHMENT = 4
-};
-
-enum class ImageUsage
-{
-    DEPTHSTENCIL = 0,
-    COLOR = 1
-};
-
-enum BarrierActionBits
-{
-    WRITE_SHADER_RESOURCE = 1,
-    READ_SHADER_RESOURCE = 2,
-    READ_UNIFORM_BUFFER = 4,
-    READ_VERTEX_INPUT = 8,
-    READ_INDIRECT_COMMAND = 16
-};
-
-enum BarrierStageBits
-{
-    VERTEX_SHADER_BARRIER = 1,
-    VERTEX_INPUT_BARRIER = 2,
-    COMPUTE_BARRIER = 4,
-    FRAGMENT_BARRIER = 8,
-    BEGINNING_OF_PIPE = 16,
-    INDIRECT_DRAW_BARRIER = 32,
-};
-
-typedef int BarrierAction;
-
-typedef int BarrierStage;
-
-enum class MemoryBarrierType
-{
-    MEMORY_BARRIER = 0,
-    IMAGE_BARRIER = 1,
-    BUFFER_BARRIER = 2,
-    BARRIER_MAX_ENUM
-};
-
-struct ShaderResourceBarrier
-{
-    MemoryBarrierType type;
-    BarrierStage srcStage;
-    BarrierStage dstStage;
-    BarrierAction srcAction;
-    BarrierAction dstAction;
-};
-
-struct ImageShaderResourceBarrier : public ShaderResourceBarrier
-{
-    ImageLayout srcResourceLayout;
-    ImageLayout dstResourceLayout;
-    ImageUsage imageType;
-};
-
-struct ShaderResourceBufferBarrier : public ShaderResourceBarrier
-{
-};
-
-struct ShaderResourceSampler : public ShaderResourceHeader
-{
-    void* samplerHandle;
-};
-
-struct ShaderResourceImage : public ShaderResourceHeader
-{
-    void* textureHandle;
-};
-
-struct ShaderResourceSamplerBindless : public ShaderResourceHeader
-{
-    void** textureHandles;
-    int textureCount;
-};
-
-struct ShaderResourceBuffer : public ShaderResourceHeader
-{
-    int allocation;
-    int offset;
-};
-
-struct ShaderResourceBufferView : public ShaderResourceHeader
-{
-    int subAllocations;
-    int allocationIndex;
-};
-
-
-struct ShaderResourceConstantBuffer : public ShaderResourceHeader
-{
-    ShaderStageType stage;
-    int size;
-    int offset;
-    void* data;
-    int allocationIndex;
-};
-
-
-
-
-
-
-static char AllocateDSMemory[16 * KiB];
-uintptr_t DSAllocator = 0;
-
-std::array<uintptr_t, 50> descriptorSets;
-static int DSIndex = 0;
-
-constexpr std::array<int, 50> makeArray(int val) {
-    std::array<int, 50> arr{};
-    std::fill(arr.begin(), arr.end(), val);
-    return arr;
-}
-
-std::array<int, 50> srvDescriptorTablesStart = makeArray(-1);
-
-void BindBufferToShaderResource(int descriptorSet, int allocationIndex, int bindingIndex, int offset)
-{
-    uintptr_t head = descriptorSets[descriptorSet];
-    ShaderResourceSet* set = (ShaderResourceSet*)head;
-    uintptr_t* offsets = (uintptr_t*)(head + sizeof(ShaderResourceSet));
-
-    ShaderResourceBuffer* header = (ShaderResourceBuffer*)offsets[bindingIndex];
-
-    if (header->type != ShaderResourceType::UNIFORM_BUFFER && header->type != ShaderResourceType::STORAGE_BUFFER)
-        return;
-
-    header->allocation = allocationIndex;
-    header->offset = offset;
-}
-
-void BindImageResourceToShaderResource(int descriptorSet, void* index, int bindingIndex)
-{
-    uintptr_t head = descriptorSets[descriptorSet];
-    ShaderResourceSet* set = (ShaderResourceSet*)head;
-    uintptr_t* offsets = (uintptr_t*)(head + sizeof(ShaderResourceSet));
-
-    ShaderResourceImage* header = (ShaderResourceImage*)offsets[bindingIndex];
-
-    if (header->type != ShaderResourceType::IMAGESTORE2D)
-        return;
-
-    header->textureHandle = index;
-}
-
-void BindSamplerResourceToShaderResource(int descriptorSet, void* index, int bindingIndex)
-{
-    uintptr_t head = descriptorSets[descriptorSet];
-    ShaderResourceSet* set = (ShaderResourceSet*)head;
-    uintptr_t* offsets = (uintptr_t*)(head + sizeof(ShaderResourceSet));
-
-    ShaderResourceSampler* header = (ShaderResourceSampler*)offsets[bindingIndex];
-
-    if (header->type != ShaderResourceType::SAMPLERSTATE)
-        return;
-
-    header->samplerHandle  = index;
-}
-
-void BindSampledImageToShaderResource(int descriptorSet, void* index, int bindingIndex)
-{
-    uintptr_t head = descriptorSets[descriptorSet];
-    ShaderResourceSet* set = (ShaderResourceSet*)head;
-    uintptr_t* offsets = (uintptr_t*)(head + sizeof(ShaderResourceSet));
-
-    ShaderResourceImage* header = (ShaderResourceImage*)offsets[bindingIndex];
-
-    if (header->type != ShaderResourceType::SAMPLER2D && header->type != ShaderResourceType::SAMPLERCUBE && header->type != ShaderResourceType::SAMPLER3D)
-        return;
-
-    header->textureHandle = index;
-}
-
-void BindSampledImageArrayToShaderResource(int descriptorSet, void** indices, uint32_t texCount, int bindingIndex)
-{
-    uintptr_t head = descriptorSets[descriptorSet];
-    ShaderResourceSet* set = (ShaderResourceSet*)head;
-    uintptr_t* offsets = (uintptr_t*)(head + sizeof(ShaderResourceSet));
-
-    ShaderResourceSamplerBindless* header = (ShaderResourceSamplerBindless*)offsets[bindingIndex];
-
-    if (header->type != ShaderResourceType::SAMPLERBINDLESS)
-        return;
-
-    header->textureHandles = indices;
-    header->textureCount = texCount;
-}
-
-void BindBufferView(int descriptorSet, int allocationIndex, int bindingIndex, int subAllocations)
-{
-    uintptr_t head = descriptorSets[descriptorSet];
-    ShaderResourceSet* set = (ShaderResourceSet*)head;
-    uintptr_t* offsets = (uintptr_t*)(head + sizeof(ShaderResourceSet));
-
-    ShaderResourceBufferView* header = (ShaderResourceBufferView*)offsets[bindingIndex];
-
-    if (header->type != ShaderResourceType::BUFFER_VIEW)
-        return;
-
-
-    header->subAllocations = subAllocations;
-    header->allocationIndex = allocationIndex;
-}
-
-void BindBarrier(int descriptorSet, int binding, BarrierStage stage, BarrierAction action)
-{
-    uintptr_t head = descriptorSets[descriptorSet];
-    ShaderResourceSet* set = (ShaderResourceSet*)head;
-    uintptr_t* offsets = (uintptr_t*)(head + sizeof(ShaderResourceSet));
-
-
-    head = offsets[binding];
-    ShaderResourceHeader* desc = (ShaderResourceHeader*)offsets[binding];
-
-
-
-    switch (desc->type)
-    {
-    case ShaderResourceType::IMAGESTORE2D:
-    case ShaderResourceType::SAMPLER2D:
-    {
-        head += sizeof(ShaderResourceImage);
-        ShaderResourceBarrier* barrier = (ShaderResourceBarrier*)head;
-
-        barrier->dstAction = action;
-        barrier->dstStage = stage;
-        break;
-    }
-    case ShaderResourceType::BUFFER_VIEW:
-    {
-        head += sizeof(ShaderResourceBufferView);
-        ShaderResourceBufferBarrier* barrier = (ShaderResourceBufferBarrier*)head;
-        barrier->dstStage = stage;
-        barrier->dstAction = action;
-        break;
-    }
-    case ShaderResourceType::STORAGE_BUFFER:
-    case ShaderResourceType::UNIFORM_BUFFER:
-    {
-
-        head += sizeof(ShaderResourceBuffer);
-        ShaderResourceBufferBarrier* barrier = (ShaderResourceBufferBarrier*)head;
-        barrier->dstStage = stage;
-        barrier->dstAction = action;
-        break;
-    }
-    }
-
-
-}
-
-void BindImageBarrier(int descriptorSet, int binding, int barrierIndex, BarrierStage stage, BarrierAction action, ImageLayout oldLayout, ImageLayout dstLayout, bool location)
-{
-    uintptr_t head = descriptorSets[descriptorSet];
-    ShaderResourceSet* set = (ShaderResourceSet*)head;
-    uintptr_t* offsets = (uintptr_t*)(head + sizeof(ShaderResourceSet));
-
-
-    head = offsets[binding];
-    ShaderResourceHeader* desc = (ShaderResourceHeader*)offsets[binding];
-
-    if (desc->type != ShaderResourceType::SAMPLER2D && desc->type != ShaderResourceType::SAMPLERCUBE && desc->type != ShaderResourceType::SAMPLER3D && desc->type != ShaderResourceType::IMAGESTORE2D)
-        return;
-
-    switch (desc->type)
-    {
-    case ShaderResourceType::IMAGESTORE2D:
-    case ShaderResourceType::SAMPLER2D:
-        head += sizeof(ShaderResourceImage);
-
-        break;
-    case ShaderResourceType::STORAGE_BUFFER:
-    case ShaderResourceType::UNIFORM_BUFFER:
-
-        head += sizeof(ShaderResourceBuffer);
-        break;
-    }
-
-
-    ImageShaderResourceBarrier* imageBarrier = (ImageShaderResourceBarrier*)head;
-
-
-    imageBarrier[barrierIndex].imageType = ImageUsage::COLOR;
-    imageBarrier[barrierIndex].dstResourceLayout = dstLayout;
-    imageBarrier[barrierIndex].srcResourceLayout = oldLayout;
-
-    if (location)
-    {
-        imageBarrier[barrierIndex].dstAction = action;
-        imageBarrier[barrierIndex].dstStage = stage;
-    }
-    else {
-        imageBarrier[barrierIndex].srcAction = action;
-        imageBarrier[barrierIndex].srcStage = stage;
-    }
-}
-
-ShaderResourceHeader* GetConstantBuffer(int descriptorSet, int constantBuffer)
-{
-    uintptr_t head = descriptorSets[descriptorSet];
-    ShaderResourceSet* set = (ShaderResourceSet*)head;
-    uintptr_t* offsets = (uintptr_t*)(head + sizeof(ShaderResourceSet));
-
-    ShaderResourceHeader* ret = (ShaderResourceHeader*)(offsets[set->bindingCount - (constantBuffer + 1)]);
-
-    if (ret->type != ShaderResourceType::CONSTANT_BUFFER) return nullptr;
-
-    return ret;
-}
-
-int GetConstantBufferCount(int descriptorSet)
-{
-    uintptr_t head = descriptorSets[descriptorSet];
-    ShaderResourceSet* set = (ShaderResourceSet*)head;
-    uintptr_t* offsets = (uintptr_t*)(head + sizeof(ShaderResourceSet));
-
-    int iter = set->bindingCount - 1;
-
-    int count = 0;
-
-    while (iter >= 0)
-    {
-        ShaderResourceHeader* ret = (ShaderResourceHeader*)(offsets[iter--]);
-        if (ret->type == ShaderResourceType::CONSTANT_BUFFER) count++;
-        else break;
-    }
-
-    return count;
-}
-
-int GetBarrierCount(int descriptorSet)
-{
-    uintptr_t head = descriptorSets[descriptorSet];
-    ShaderResourceSet* set = (ShaderResourceSet*)head;
-    return set->barrierCount;
-}
-
-void UploadConstant(int descriptorset, void* data, int bufferLocation)
-{
-    ShaderResourceConstantBuffer* header = (ShaderResourceConstantBuffer*)GetConstantBuffer(descriptorset, bufferLocation);
-    if (!header) return;
-    header->data = data;
-}
-
-void UploadConstant(int descriptorset, int allocationIndex, int bufferLocation)
-{
-    ShaderResourceConstantBuffer* header = (ShaderResourceConstantBuffer*)GetConstantBuffer(descriptorset, bufferLocation);
-    if (!header) return;
-    header->allocationIndex = allocationIndex;
-}
-
-int AllocateShaderResourceSet(ShaderGraph* graph, uint32_t targetSet, int setCount)
-{
-    uintptr_t head = (uintptr_t)AllocateDSMemory + DSAllocator;
-
-    uintptr_t ptr = head;
-    ShaderResourceSet* set = (ShaderResourceSet*)ptr;
-    ptr += sizeof(ShaderResourceSet);
-
-    ShaderSetLayout* resourceSet = (ShaderSetLayout*)graph->GetSet(targetSet);
-
-    set->bindingCount = resourceSet->bindingCount;
-    set->layoutHandle = resourceSet->vulkanDescLayout;
-    set->setCount = setCount;
-    set->barrierCount = 0;
-
-    uintptr_t* offset = (uintptr_t*)ptr;
-
-    ptr += sizeof(uintptr_t) * (set->bindingCount);
-
-
-    int constantCount = set->bindingCount;
-    for (int h = 0; h < set->bindingCount; h++)
-    {
-        MemoryBarrierType memBarrierType = MemoryBarrierType::MEMORY_BARRIER;
-
-        ShaderResource* resource = (ShaderResource*)graph->GetResource(resourceSet->resourceStart + h);
-
-        if (resource->set != targetSet) continue;
-
-        ShaderResourceHeader* desc = (ShaderResourceHeader*)ptr;
-
-        if (resource->binding != ~0)
-            desc->binding = resource->binding;
-        else
-            desc->binding = --constantCount;
-
-        desc->type = resource->type;
-        desc->action = resource->action;
-        desc->arrayCount = resource->arrayCount;
-
-        offset[desc->binding] = ptr;
-
-        switch (resource->type)
-        {
-        case ShaderResourceType::SAMPLERSTATE:
-        {
-
-            ptr += sizeof(ShaderResourceSampler);
-            break;
-        }
-        case ShaderResourceType::IMAGESTORE2D:
-        {
-            ptr += sizeof(ShaderResourceImage);
-            memBarrierType = MemoryBarrierType::IMAGE_BARRIER;
-            if (resource->action == ShaderResourceAction::SHADERWRITE || resource->action == ShaderResourceAction::SHADERREADWRITE)
-            {
-                /*
-                ImageShaderResourceBarrier* barriers = (ImageShaderResourceBarrier*)ptr;
-                barriers->dstStage = ConvertShaderStageToBarrierStage(resource->stages);
-                barriers->dstAction = WRITE_SHADER_RESOURCE;
-                barriers->type = memBarrierType;
-
-                barriers[1].srcStage = ConvertShaderStageToBarrierStage(resource->stages);
-                barriers[1].srcAction = WRITE_SHADER_RESOURCE;
-                barriers[1].type = memBarrierType;
-
-                ptr += (sizeof(ImageShaderResourceBarrier) * 2);
-                set->barrierCount += 2;
-                */
-            }
-            break;
-        }
-        case ShaderResourceType::SAMPLER3D:
-        case ShaderResourceType::SAMPLER2D:
-        case ShaderResourceType::SAMPLERCUBE:
-        {
-            ptr += sizeof(ShaderResourceImage);
-            memBarrierType = MemoryBarrierType::IMAGE_BARRIER;
-            if (resource->action == ShaderResourceAction::SHADERWRITE || resource->action == ShaderResourceAction::SHADERREADWRITE)
-            {
-                /*
-                ImageShaderResourceBarrier* barriers = (ImageShaderResourceBarrier*)ptr;
-                barriers->srcStage = ConvertShaderStageToBarrierStage(resource->stages);
-                barriers->srcAction = WRITE_SHADER_RESOURCE;
-                barriers->type = memBarrierType;
-                ptr += (sizeof(ImageShaderResourceBarrier));
-                set->barrierCount++;
-                */
-            }
-            break;
-        }
-        case ShaderResourceType::SAMPLERBINDLESS:
-        {
-            memBarrierType = MemoryBarrierType::IMAGE_BARRIER;
-            memset((void*)ptr, 0, sizeof(ShaderResourceSamplerBindless));
-            ptr += sizeof(ShaderResourceSamplerBindless);
-            break;
-        }
-        case ShaderResourceType::CONSTANT_BUFFER:
-        {
-            ShaderResourceConstantBuffer* constants = (ShaderResourceConstantBuffer*)ptr;
-            constants->size = resource->size;
-            constants->offset = resource->offset;
-            constants->stage = resource->stages;
-            constants->data = NULL;
-            constants->allocationIndex = -1;
-            ptr += sizeof(ShaderResourceConstantBuffer);
-            break;
-        }
-        case ShaderResourceType::STORAGE_BUFFER:
-        case ShaderResourceType::UNIFORM_BUFFER:
-        {
-            memBarrierType = MemoryBarrierType::BUFFER_BARRIER;
-            ptr += sizeof(ShaderResourceBuffer);
-            if (resource->action == ShaderResourceAction::SHADERWRITE || resource->action == ShaderResourceAction::SHADERREADWRITE)
-            {
-                /*
-                ShaderResourceBarrier* barriers = (ShaderResourceBarrier*)ptr;
-                barriers->srcStage = ConvertShaderStageToBarrierStage(resource->stages);
-                barriers->srcAction = WRITE_SHADER_RESOURCE;
-                barriers->type = memBarrierType;
-                ptr += (sizeof(ShaderResourceBufferBarrier));
-                set->barrierCount++;
-                */
-            }
-            break;
-        }
-        case ShaderResourceType::BUFFER_VIEW:
-        {
-            memBarrierType = MemoryBarrierType::BUFFER_BARRIER;
-            ptr += sizeof(ShaderResourceBufferView);
-            if (resource->action == ShaderResourceAction::SHADERWRITE || resource->action == ShaderResourceAction::SHADERREADWRITE)
-            {
-                /*
-                ShaderResourceBarrier* barriers = (ShaderResourceBarrier*)ptr;
-                barriers->srcStage = ConvertShaderStageToBarrierStage(resource->stages);
-                barriers->srcAction = WRITE_SHADER_RESOURCE;
-                barriers->type = memBarrierType;
-                ptr += (sizeof(ShaderResourceBufferBarrier));
-                set->barrierCount++;
-                (*/
-            }
-            break;
-        }
-        }
-
-
-    }
-
-    DSAllocator += ptr - head;
-
-
-    int ret = DSIndex++;
-
-    descriptorSets[ret] = head;
-
-    return ret;
-}
-
-
-
-
-
 int AllocFromHostBuffer(size_t size, size_t alignment, int copies)
 {
  
@@ -1474,6 +519,9 @@ int AllocFromDeviceBuffer(size_t size, size_t alignment, int copies)
 void DoSceneStuff()
 {
 
+
+    CreateTextureMemoryPool(&bgraPool, 256 * MiB, D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT);
+
     ShaderGraph* mainLayout = ShaderGraphReader::CreateShaderGraph("DirectLayout.xml");
 
     
@@ -1507,7 +555,7 @@ void DoSceneStuff()
 
     TransitionBufferBarrier(transferCommandBuffer, deviceLocalBuffer.bufferHandle, D3D12_BARRIER_SYNC_COPY, D3D12_BARRIER_ACCESS_COPY_DEST, D3D12_BARRIER_SYNC_DRAW | D3D12_BARRIER_SYNC_INDEX_INPUT, D3D12_BARRIER_ACCESS_VERTEX_BUFFER | D3D12_BARRIER_ACCESS_CONSTANT_BUFFER | D3D12_BARRIER_ACCESS_INDEX_BUFFER);
 
-    bgraImageMemoryPool = CreateImageResource(deviceHandle, details.width, details.height, 1, details.miplevels, D3D12_RESOURCE_FLAG_NONE, details.type, D3D12_RESOURCE_DIMENSION_TEXTURE2D);
+    bgraImageMemoryPool = CreatePlacedImageResource(deviceHandle, &bgraPool, details.width, details.height, 1, details.miplevels, D3D12_RESOURCE_FLAG_NONE, details.type, D3D12_RESOURCE_DIMENSION_TEXTURE2D);
 
     WriteToImageDeviceLocalMemory(bgraImageMemoryPool, details.data, details.width, details.height, 4, details.dataSize, details.type, details.miplevels, 1);
 
@@ -1539,7 +587,6 @@ void DoSceneStuff()
     triangles[0].descriptorHeap[0] = mainSRVDescriptorHeap.descriptorHeap;
     triangles[0].descriptorHeap[1] = mainSamplerDescriptorHeap.descriptorHeap;
 
-    triangles[0].descriptorTableCount = 3;
 
     triangles[1].topology = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
     triangles[1].heapsCount = 2;
@@ -1551,8 +598,6 @@ void DoSceneStuff()
 
     triangles[1].pipelineState = triangles[0].pipelineState;
     triangles[1].rootSignature = triangles[0].rootSignature;
-
-    triangles[1].descriptorTableCount = 3;
 
     triangles[0].indexBuffer = deviceLocalBuffer.bufferHandle;
     triangles[1].indexBuffer = deviceLocalBuffer.bufferHandle;
@@ -1647,9 +692,12 @@ int main()
         goto end;
     }
 
+    CreateDSVRSVMemoryPool(&rsvdsvPool, 24 * MiB, (1<<22), false);
+
     if (CreateDepthStencilView(
         deviceHandle,
         globalDSVDescriptorHeap,
+        &rsvdsvPool,
         swapChainDepthImages, globalDSVDescriptorSize) < 0)
     {
         goto end;
@@ -1853,6 +901,15 @@ ID3D12PipelineState* CreatePipelineStateObject(ID3D12Device2* device, ID3D12Root
 
 void ReleaseD3D12Resources()
 {
+
+    if (rsvdsvPool.heap)
+        rsvdsvPool.heap->Release();
+
+    if (bgraPool.heap)
+        bgraPool.heap->Release();
+
+    if (bgraImageMemoryPool)
+        bgraImageMemoryPool->Release();
 
     if (transferCommandPool)
         transferCommandPool->Release();
@@ -2330,7 +1387,7 @@ int CreateRenderTargetView(ID3D12Device2* device, IDXGISwapChain4* swapChain, ID
     return 0;
 }
 
-int CreateDepthStencilView(ID3D12Device2* device, ID3D12DescriptorHeap* descriptorHeap, ID3D12Resource** outBuffers, UINT dsvDescriptorSize)
+int CreateDepthStencilView(ID3D12Device2* device, ID3D12DescriptorHeap* descriptorHeap, TextureMemoryPool *pool, ID3D12Resource** outBuffers, UINT dsvDescriptorSize)
 {
     CD3DX12_CPU_DESCRIPTOR_HANDLE dsvHandle(descriptorHeap->GetCPUDescriptorHandleForHeapStart());
 
@@ -2355,9 +1412,14 @@ int CreateDepthStencilView(ID3D12Device2* device, ID3D12DescriptorHeap* descript
         clearValue.DepthStencil.Depth = 1.0f;
         clearValue.DepthStencil.Stencil = 0;
 
-        CD3DX12_HEAP_PROPERTIES props = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
+        D3D12_RESOURCE_ALLOCATION_INFO allocInfo =
+            device->GetResourceAllocationInfo(0, 1, &depthStencilDesc);
 
-        if (FAILED(device->CreateCommittedResource(&props, D3D12_HEAP_FLAG_NONE, &depthStencilDesc, D3D12_RESOURCE_STATE_DEPTH_WRITE, &clearValue, IID_PPV_ARGS(&depthBuffer))))
+        UINT64 location = (pool->currentPointer + allocInfo.Alignment - 1) & ~(allocInfo.Alignment - 1);
+
+        pool->currentPointer += (allocInfo.SizeInBytes + (location - pool->currentPointer));
+
+        if (FAILED(device->CreatePlacedResource(pool->heap, location, &depthStencilDesc, D3D12_RESOURCE_STATE_DEPTH_WRITE, &clearValue, IID_PPV_ARGS(&depthBuffer))))
         {
             printf("Failed to create depth stencil resource\n");
             return -1;
@@ -2486,7 +1548,6 @@ void Flush(ID3D12CommandQueue* commandQueue, ID3D12Fence* fence, uint64_t& fence
 
 int Render()
 {
-    static int depthBufferExchange = 0;
 
     auto commandAllocator = graphicCommandPools[currentFrame];
 
@@ -2806,7 +1867,7 @@ ID3D12Resource* CreateDeviceLocalBuffer(ID3D12Device2* device, UINT size, D3D12_
 //D3D12_RESOURCE_DIMENSION_TEXTURE2D
 
 
-ID3D12Resource* CreateImageResource(ID3D12Device2* device, UINT width, UINT height, UINT depth, UINT mips, D3D12_RESOURCE_FLAGS flags, DXGI_FORMAT format, D3D12_RESOURCE_DIMENSION dimension)
+ID3D12Resource* CreateCommittedImageResource(ID3D12Device2* device, UINT width, UINT height, UINT depth, UINT mips, D3D12_RESOURCE_FLAGS flags, DXGI_FORMAT format, D3D12_RESOURCE_DIMENSION dimension)
 {
     D3D12_RESOURCE_DESC imageDesc = {};
     imageDesc.Dimension = dimension;
@@ -2837,6 +1898,48 @@ ID3D12Resource* CreateImageResource(ID3D12Device2* device, UINT width, UINT heig
 
     return imageHandle;
 }
+
+
+
+ID3D12Resource* CreatePlacedImageResource(ID3D12Device2* device, TextureMemoryPool* pool, UINT width, UINT height, UINT depth, UINT mips, D3D12_RESOURCE_FLAGS flags, DXGI_FORMAT format, D3D12_RESOURCE_DIMENSION dimension)
+{
+
+
+    D3D12_RESOURCE_DESC imageDesc = {};
+    imageDesc.Dimension = dimension;
+    imageDesc.Alignment = 0;
+    imageDesc.Width = width;
+    imageDesc.Height = height;
+    imageDesc.DepthOrArraySize = depth;
+    imageDesc.MipLevels = mips;
+    imageDesc.Format = format;
+    imageDesc.SampleDesc.Count = 1;
+    imageDesc.SampleDesc.Quality = 0;
+    imageDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+    imageDesc.Flags = flags;
+
+    D3D12_RESOURCE_ALLOCATION_INFO allocInfo =
+        device->GetResourceAllocationInfo(0, 1, &imageDesc);
+
+
+    UINT64 location = (pool->currentPointer + allocInfo.Alignment-1) & ~(allocInfo.Alignment-1);
+
+    pool->currentPointer += (allocInfo.SizeInBytes + (location - pool->currentPointer));
+
+    ID3D12Resource* imageHandle = nullptr;
+    device->CreatePlacedResource(
+        pool->heap,
+        location,
+        &imageDesc,
+        D3D12_RESOURCE_STATE_COMMON,
+        nullptr,
+        IID_PPV_ARGS(&imageHandle)
+    );
+
+    return imageHandle;
+}
+
+
 
 void TransitionBufferBarrier(ID3D12GraphicsCommandList7* cmdBuffer, ID3D12Resource* resource, D3D12_BARRIER_SYNC srcSync, D3D12_BARRIER_ACCESS srcAccess,  D3D12_BARRIER_SYNC dstSync, D3D12_BARRIER_ACCESS dstAccess)
 {
@@ -3221,821 +2324,6 @@ ID3D12RootSignature* CreateRootSignature(ID3D12Device2* device, CD3DX12_ROOT_PAR
     return rootSignature;
 };
 
-
-
-
-uintptr_t ShaderGraph::GetSet(int setIndex)
-{
-    uintptr_t head = (uintptr_t)(this) + sizeof(ShaderGraph) + (setIndex * sizeof(ShaderSetLayout));
-    return head;
-}
-
-uintptr_t ShaderGraph::GetResource(int resourceIndex)
-{
-    uintptr_t head = (uintptr_t)(this) + sizeof(ShaderGraph) + (resourceSetCount * sizeof(ShaderSetLayout)) + (shaderMapCount * sizeof(ShaderMap));
-
-    head += (sizeof(ShaderResource) * resourceIndex);
-
-    return head;
-}
-
-uintptr_t ShaderGraph::GetMap(int mapIndex)
-{
-    uintptr_t head = (uintptr_t)(this) + sizeof(ShaderGraph) + (resourceSetCount * sizeof(ShaderSetLayout)) + (mapIndex * sizeof(ShaderMap));
-
-    return head;
-}
-
-int ShaderGraph::GetGraphSize() const
-{
-    int size = sizeof(ShaderGraph) + (resourceSetCount * sizeof(ShaderSetLayout)) + (shaderMapCount * sizeof(ShaderMap)) + (resourceCount * sizeof(ShaderResource));
-    return size;
-}
-int ShaderMap::GetMapSize() const
-{
-    return sizeof(ShaderMap);
-}
-#include <stdexcept>
-
-struct ShaderDetails
-{
-    int shaderNameSize;
-    int shaderDataSize;
-
-    ShaderDetails* GetNext();
-
-    char* GetString();
-
-    void* GetShaderData();
-};
-
-ShaderDetails* ShaderDetails::GetNext()
-{
-    return (ShaderDetails*)((uintptr_t)this + sizeof(ShaderDetails) + shaderDataSize + shaderNameSize);
-}
-
-char* ShaderDetails::GetString()
-{
-    return (char*)((uintptr_t)this + sizeof(ShaderDetails));
-}
-
-void* ShaderDetails::GetShaderData()
-{
-    return (void*)((uintptr_t)this + sizeof(ShaderDetails) + shaderNameSize);
-}
-
-constexpr unsigned long
-ShaderGraphReader::hash(char* str)
-{
-    unsigned long hash = 5381;
-    int c;
-
-    while (c = *str++) {
-        if (((c - 'A') >= 0 && (c - 'Z') <= 0) || ((c - 'a') >= 0 && (c - 'z') <= 0))
-            hash = ((hash << 5) + hash) + c; /* hash * 33 + c */
-    }
-
-    return hash;
-}
-
-constexpr unsigned long
-ShaderGraphReader::hash(const std::string& string)
-{
-    unsigned long hash = 5381;
-    int c;
-
-    const char* str = string.c_str();
-
-    while (c = *str++) {
-        if (((c - 'A') >= 0 && (c - 'Z') <= 0) || ((c - 'a') >= 0 && (c - 'z') <= 0) || ((c - '0') >= 0 && (c - '9') <= 0))
-            hash = ((hash << 5) + hash) + c; /* hash * 33 + c */
-    }
-
-    return hash;
-}
-
-size_t shaderGraphSize = 0;
-char readerMemBuffer[64 * KiB];
-size_t readerMemBufferAllocate = 0;
-
-ShaderGraph* ShaderGraphReader::CreateShaderGraph(
-    const std::string& filename
-)
-{
-
-    uintptr_t TreeNodes[50]{};
-    int SetNodes[15]{};
-    int ShaderRefs[5]{};
-    ShaderDetails* details[5]{};
-
-    OSFileHandle fileHandle;
-
-   auto ret = OSOpenFile(filename.c_str(), READ, &fileHandle);
-
-    if (ret)
-    {
-        throw std::runtime_error("Shader Init file is unable to be opened");
-    }
-
-    char* data = (char*)AllocFromTemp(fileHandle.fileLength, 64);
-
-    shaderGraphSize = fileHandle.fileLength;
-
-    OSReadFile(&fileHandle, fileHandle.fileLength, data);
-
-    OSCloseFile(&fileHandle);
-
-    int shaderCount = 0;
-    int shaderResourceCount = 0;
-    int setCount = 0;
-
-    int lastShader = 0;
-    int shaderDetailDataStride = 0;
-
-    int tagCount = 0;
-    int curr = 0;
-
-    int stride = SkipLine(data, curr);
-    curr += stride;
-
-    while (curr + stride < shaderGraphSize)
-    {
-
-        unsigned long hashl = 0;
-        bool opening = true;
-        stride = ProcessTag(data, curr, &hashl, &opening);
-        curr += stride;
-
-        stride = SkipLine(data, curr);
-
-        if (opening)
-        {
-            tagCount++;
-        }
-
-
-
-        switch (hashl)
-        {
-        case hash("ShaderGraph"):
-            //std::cout << "ShaderGraph" << std::endl;
-            if (!opening)
-                curr = shaderGraphSize;
-            break;
-           
-        case hash("HLSLShader"):
-            //std::cout << "GLSLShader" << std::endl;
-            if (opening) {
-                curr += stride;
-                stride = SkipLine(data, curr);
-                shaderCount++;
-            }
-            break;
-            
-        case hash("ShaderResourceSet"):
-            //std::cout << "ShaderResourceSet" << std::endl;
-            if (opening) {
-                SetNodes[setCount] = tagCount;
-                setCount++;
-            }
-            break;
-        case hash("ShaderResourceItem"):
-            //std::cout << "ShaderResourceItem" << std::endl;
-            if (opening) {
-                stride = HandleShaderResourceItem(data, curr, &TreeNodes[tagCount]);
-                shaderResourceCount++;
-            }
-            break;
-        case hash("ComputeLayout"):
-            //std::cout << "ComputeLayout" << std::endl;
-            if (opening) {
-                stride = HandleComputeLayout(data, curr, &TreeNodes[tagCount]);
-            }
-
-            break;
-        }
-
-        curr += stride;
-
-
-    }
-
-    
-
-    ShaderGraph* graph = (ShaderGraph*)(AllocFromTemp(sizeof(ShaderGraph) + (setCount * sizeof(ShaderSetLayout)) + (shaderResourceCount * sizeof(ShaderResource)) + (shaderCount * sizeof(ShaderMap)), 4));
-
-    memset(graph, 0, sizeof(ShaderGraph) + (setCount * sizeof(ShaderSetLayout)) + (shaderResourceCount * sizeof(ShaderResource)));
-
-    graph->shaderMapCount = shaderCount;
-    graph->resourceSetCount = setCount;
-
-    /*
-    int shaderIndex = 0;
-
-    for (int j = 0; j < shaderCount; j++)
-    {
-        ShaderMap* map = (ShaderMap*)graph->GetMap(j);
-
-        ShaderGLSLShaderXMLTag* tag = (ShaderGLSLShaderXMLTag*)TreeNodes[ShaderRefs[j]];
-
-        ShaderStageType type = tag->type;
-
-        if (type == ShaderStageTypeBits::COMPUTESHADERSTAGE)
-        {
-            ShaderComputeLayoutXMLTag* ctag = (ShaderComputeLayoutXMLTag*)TreeNodes[ShaderRefs[j] + 1];
-            ShaderDetails* deats = details[j];
-            ShaderComputeLayout* layout = (ShaderComputeLayout*)deats->GetShaderData();
-            layout->x = ctag->comps.x;
-            layout->y = ctag->comps.y;
-            layout->z = ctag->comps.z;
-        }
-
-        map->type = type;
-
-
-    }
-    */
-
-    int resourceIter = 0;
-
-    for (int i = 0; i < setCount; i++)
-    {
-
-        ShaderSetLayout* setLay = (ShaderSetLayout*)graph->GetSet(i);
-        int resIter = SetNodes[i] + 1;
-        ShaderResourceItemXMLTag* tag = (ShaderResourceItemXMLTag*)TreeNodes[resIter];
-        int bindingCount = 0;
-
-        setLay->resourceStart = resourceIter;
-        while (tag && tag->hashCode == hash("ShaderResourceItem"))
-        {
-
-            ShaderResource* resource = (ShaderResource*)graph->GetResource(resourceIter++);
-            if (tag->resourceType == ShaderResourceType::CONSTANT_BUFFER)
-            {
-                resource->binding = ~0;
-            }
-            else
-            {
-                resource->binding = bindingCount;
-            }
-
-            resource->stages = tag->shaderstage;
-
-            resource->action = tag->resourceAction;
-            resource->type = tag->resourceType;
-            resource->arrayCount = tag->arrayCount;
-            resource->set = i;
-            resource->size = tag->size;
-            resource->offset = tag->offset;
-            setLay->bindingCount++;
-
-
-            if (!(tag->resourceType == ShaderResourceType::CONSTANT_BUFFER))
-            {
-                bindingCount++;
-            }
-
-            tag = (ShaderResourceItemXMLTag*)TreeNodes[++resIter];
-        }
-    }
-
-    graph->resourceCount = resourceIter;
-
-    readerMemBufferAllocate = 0;
-
-    return graph;
-}
-
-int ShaderGraphReader::ProcessTag(char* fileData, int currentLocation, unsigned long* hash, bool* opening)
-{
-    int count = 0;
-    char* data = fileData + currentLocation;
-    size_t size = shaderGraphSize;
-
-    unsigned long hashl = 5381;
-
-    while (currentLocation + count < size)
-    {
-        if (std::isspace(data[count]) && hashl == 5381)
-        {
-            count++;
-            continue;
-        }
-
-        if (data[count] != '<' && hashl == 5381)
-            throw std::runtime_error("malformed xml tag");
-
-        if (data[count] == '\n' || data[count] == ' ' || data[count] == '>')
-        {
-            count++;
-            break;
-        }
-
-        if (data[count] == '<')
-        {
-            count++;
-            if (data[count] == '/')
-            {
-                *opening = false;
-                count++;
-            }
-        }
-
-        hashl = ((hashl << 5) + hashl) + data[count];
-
-        count++;
-    }
-
-    *hash = hashl;
-
-    return count;
-}
-
-int ShaderGraphReader::SkipLine(char* fileData, int currentLocation)
-{
-    int count = 0;
-    char* data = fileData + currentLocation;
-    size_t size = shaderGraphSize;
-    while (currentLocation + count < size && data[count++] != '\n');
-    data = fileData + currentLocation + count;
-    return count;
-}
-
-int ShaderGraphReader::ReadValue(char* fileData, int currentLocation, char* str, int* len)
-{
-    int memCounter = 0;
-    int count = 0;
-    char* data = fileData + currentLocation;
-    while (true)
-    {
-        int test = count++;
-
-        int c = data[test];
-
-        if (c == '\n')
-        {
-            count = count - 1;
-            break;
-        }
-
-        if (std::isspace(c))
-            continue;
-
-        str[memCounter++] = c;
-
-    }
-
-    str[memCounter++] = 0;
-
-    *len = (memCounter);
-
-    return count;
-}
-#define MAX_ATTRIBUTE_LEN 50
-int ShaderGraphReader::ReadAttributeName(char* fileData, int currentLocation, unsigned long* hash)
-{
-    int count = 0;
-    char* data = fileData + currentLocation;
-
-    unsigned long hashl = 5381;
-
-
-    while (true)
-    {
-        int test = count++;
-
-        int c = data[test];
-
-        if (c == '>')
-        {
-            count = count - 1;
-            break;
-        }
-
-        if (c == '=')
-            break;
-
-        if (std::isspace(c))
-            continue;
-
-        if (count == MAX_ATTRIBUTE_LEN + currentLocation)
-            throw std::runtime_error("malformed xml attribute");
-
-        hashl = ((hashl << 5) + hashl) + c;
-
-    }
-
-    *hash = hashl;
-
-    return count;
-}
-
-int ShaderGraphReader::ReadAttributeValueHash(char* fileData, int currentLocation, unsigned long* hash)
-{
-    int count = 0;
-    char* data = fileData + currentLocation;
-
-    unsigned long hashl = 5381;
-
-    while (true)
-    {
-        int test = count++;
-
-        int c = data[test];
-
-        if (c == '>')
-        {
-            count = count - 1;
-            break;
-        }
-
-        if (std::isspace(c))
-        {
-            if (hashl == 5381)
-                continue;
-            else
-                break;
-        }
-
-        if (c == '\"' || c == '\'')
-            continue;
-
-        if (count == MAX_ATTRIBUTE_LEN + currentLocation) {
-            throw std::runtime_error("malformed xml attribute");
-        }
-
-        hashl = ((hashl << 5) + hashl) + c;
-
-    }
-
-    *hash = hashl;
-
-    return count;
-}
-
-int ShaderGraphReader::ReadAttributeValueVal(char* fileData, int currentLocation, unsigned long* val)
-{
-    int count = 0;
-    char* data = fileData + currentLocation;
-
-    unsigned long out = 0;
-
-    while (true)
-    {
-        int test = count++;
-
-        int c = data[test];
-
-        if (c == '>')
-        {
-            count = count - 1;
-            break;
-        }
-
-        if (std::isspace(c))
-        {
-            if (out == 0)
-                continue;
-            else
-                break;
-        }
-
-        if (c == '\"' || c == '\'')
-            continue;
-
-        if (count == (MAX_ATTRIBUTE_LEN + currentLocation) || ((c - '0') < 0 || (c - '9') > 0)) {
-            throw std::runtime_error("malformed xml attribute");
-        }
-
-        out = (out * 10) + (c - '0');
-
-    }
-
-    *val = out;
-
-    return count;
-}
-
-#define MAX_ATTRIBUTE_LINE_LEN 200
-
-int ShaderGraphReader::ReadAttributes(char* fileData, int currentLocation, unsigned long* hashes, int* stackSize, int valType)
-{
-    int count = 0;
-    char* data = fileData + currentLocation;
-    size_t size = shaderGraphSize;
-
-    int ret = 0;
-    char c = data[ret];
-
-    while (c != '>' && ret < MAX_ATTRIBUTE_LINE_LEN && (currentLocation + ret) < size)
-    {
-        ret += ReadAttributeName(fileData, currentLocation + ret, &hashes[count]);
-
-        switch (hashes[count])
-        {
-        case hash("type"):
-        case hash("used"):
-        case hash("rw"):
-        {
-            ret += ReadAttributeValueHash(fileData, currentLocation + ret, &hashes[count + 1]);
-            break;
-        }
-        case hash("offset"):
-        case hash("size"):
-        case hash("count"):
-        case hash("x"):
-        case hash("y"):
-        case hash("z"):
-        {
-            ret += ReadAttributeValueVal(fileData, currentLocation + ret, &hashes[count + 1]);
-            break;
-        }
-        }
-        c = data[ret];
-        count += 2;
-    }
-
-    *stackSize = count;
-
-    while (c != '\n' && ret < MAX_ATTRIBUTE_LINE_LEN && (currentLocation + ret) < size)
-    {
-        c = data[ret++];
-    }
-
-    return ret;
-}
-
-
-
-int ShaderGraphReader::HandleGLSLShader(char* fileData, int currentLocation, uintptr_t* offset, void* shaderData, int* shaderDataSize)
-{
-    unsigned long hashes[6];
-
-    int size = 0;
-
-    int ret = ReadAttributes(fileData, currentLocation, hashes, &size, 0);
-
-    uintptr_t detailHead = (uintptr_t)shaderData;
-
-    ShaderDetails* details = (ShaderDetails*)detailHead;
-
-    details->shaderDataSize = 0;
-    details->shaderNameSize = 0;
-
-    detailHead += sizeof(ShaderDetails);
-
-    ShaderGLSLShaderXMLTag* tag = (ShaderGLSLShaderXMLTag*)&readerMemBuffer[readerMemBufferAllocate];
-
-    *offset = (uintptr_t)tag;
-
-    tag->hashCode = hash("HLSLShader");
-
-    int stackIter = 0;
-
-    while (size > stackIter)
-    {
-        unsigned long code = hashes[stackIter];
-        unsigned long codeV = hashes[stackIter + 1];
-
-        switch (code)
-        {
-        case hash("type"):
-        {
-            switch (codeV)
-            {
-            case hash("compute"):
-                details->shaderDataSize = 12;
-                tag->type = ShaderStageTypeBits::COMPUTESHADERSTAGE;
-                break;
-            case hash("vert"):
-                tag->type = ShaderStageTypeBits::VERTEXSHADERSTAGE;
-                break;
-            case hash("fragment"):
-                tag->type = ShaderStageTypeBits::FRAGMENTSHADERSTAGE;
-                break;
-            }
-            break;
-        }
-
-        default:
-            throw std::runtime_error("Failed GLSL Type of Shader");
-            break;
-        }
-
-        stackIter += 2;
-    }
-
-    readerMemBufferAllocate += sizeof(ShaderGLSLShaderXMLTag);
-
-    ret += ReadValue(fileData, currentLocation + ret, details->GetString(), &details->shaderNameSize);
-
-    *shaderDataSize = (sizeof(ShaderDetails) + details->shaderNameSize + details->shaderDataSize);
-
-    return ret;
-}
-
-int ShaderGraphReader::HandleShaderResourceItem(char* fileData, int currentLocation, uintptr_t* offset)
-{
-    unsigned long hashes[12];
-
-    int size = 0;
-
-    int ret = ReadAttributes(fileData, currentLocation, hashes, &size, 0);
-
-    ShaderResourceItemXMLTag* tag = (ShaderResourceItemXMLTag*)&readerMemBuffer[readerMemBufferAllocate];
-
-    *offset = (uintptr_t)tag;
-
-    tag->hashCode = hash("ShaderResourceItem");
-
-    tag->arrayCount = 1;
-
-    int stackIter = 0;
-
-    while (size > stackIter)
-    {
-        unsigned long code = hashes[stackIter];
-        unsigned long codeV = hashes[stackIter + 1];
-        switch (code)
-        {
-        case hash("type"):
-        {
-            switch (codeV)
-            {
-            case hash("samplerCube"):
-                tag->resourceType = ShaderResourceType::SAMPLERCUBE;
-                tag->resourceAction = ShaderResourceAction::SHADERREAD;
-                break;
-            case hash("sampler2d"):
-                tag->resourceType = ShaderResourceType::SAMPLER2D;
-                tag->resourceAction = ShaderResourceAction::SHADERREAD;
-                break;
-            case hash("image2D"):
-                tag->resourceType = ShaderResourceType::IMAGESTORE2D;
-                break;
-            case hash("sampler"):
-                tag->resourceType = ShaderResourceType::SAMPLERSTATE;
-                break;
-            case hash("storage"):
-                tag->resourceType = ShaderResourceType::STORAGE_BUFFER;
-                break;
-            case hash("uniform"):
-                tag->resourceType = ShaderResourceType::UNIFORM_BUFFER;
-                tag->resourceAction = ShaderResourceAction::SHADERREAD;
-                break;
-            case hash("constantbuffer"):
-                tag->resourceType = ShaderResourceType::CONSTANT_BUFFER;
-                tag->resourceAction = ShaderResourceAction::SHADERREAD;
-                break;
-            case hash("sampler2dBindless"):
-                tag->resourceType = ShaderResourceType::SAMPLERBINDLESS;
-                tag->resourceAction = ShaderResourceAction::SHADERREAD;
-                break;
-            case hash("sampler3d"):
-                tag->resourceType = ShaderResourceType::SAMPLER3D;
-                tag->resourceAction = ShaderResourceAction::SHADERREAD;
-                break;
-            case hash("bufferView"):
-                tag->resourceType = ShaderResourceType::BUFFER_VIEW;
-                break;
-            default:
-                throw std::runtime_error("Failed Resource Type");
-            }
-
-            break;
-        }
-        case hash("used"):
-        {
-            switch (codeV)
-            {
-            case hash("c"):
-                tag->shaderstage = ShaderStageTypeBits::COMPUTESHADERSTAGE;
-                break;
-            case hash("v"):
-                tag->shaderstage = ShaderStageTypeBits::VERTEXSHADERSTAGE;
-                break;
-            case hash("f"):
-                tag->shaderstage = ShaderStageTypeBits::FRAGMENTSHADERSTAGE;
-                break;
-            case hash("vf"):
-                tag->shaderstage = ShaderStageTypeBits::VERTEXSHADERSTAGE | ShaderStageTypeBits::FRAGMENTSHADERSTAGE;
-                break;
-            default:
-                throw std::runtime_error("Failed Used Type");
-            }
-
-            break;
-        }
-        case hash("rw"):
-        {
-            switch (codeV)
-            {
-            case hash("read"):
-                tag->resourceAction = ShaderResourceAction::SHADERREAD;
-                break;
-            case hash("write"):
-                tag->resourceAction = ShaderResourceAction::SHADERWRITE;
-                break;
-            case hash("readwrite"):
-                tag->resourceAction = ShaderResourceAction::SHADERREADWRITE;
-                break;
-            default:
-                throw std::runtime_error("Failed Action Type");
-            }
-
-            break;
-        }
-        case hash("count"):
-        {
-            tag->arrayCount = codeV;
-            break;
-        }
-        case hash("size"):
-        {
-            tag->size = codeV;
-            break;
-        }
-        case hash("offset"):
-        {
-            tag->offset = codeV;
-            break;
-        }
-        }
-
-        stackIter += 2;
-    }
-
-    readerMemBufferAllocate += sizeof(ShaderResourceItemXMLTag);
-
-    return ret;
-}
-
-
-constexpr int ShaderGraphReader::ASCIIToInt(char* str)
-{
-    int c;
-    int out = 0;
-
-    while (c = *str++) {
-        if ((c - '0') >= 0 && (c - '9') <= 0)
-            out = (out * 10) + (c - '0');
-    }
-
-    return out;
-}
-
-int ShaderGraphReader::HandleComputeLayout(char* fileData, int currentLocation, uintptr_t* offset)
-{
-    unsigned long hashesAndVals[6];
-
-    int size = 0;
-
-    int ret = ReadAttributes(fileData, currentLocation, hashesAndVals, &size, 1);
-
-    ShaderComputeLayoutXMLTag* tag = (ShaderComputeLayoutXMLTag*)&readerMemBuffer[readerMemBufferAllocate];
-
-    *offset = (uintptr_t)tag;
-
-    tag->hashCode = hash("ComputeLayout");
-
-    int stackIter = 0;
-
-    while (size > stackIter)
-    {
-        unsigned long code = hashesAndVals[stackIter];
-        unsigned long comp = hashesAndVals[stackIter + 1];
-
-        switch (code)
-        {
-        case hash("x"):
-        {
-            tag->comps.x = comp;
-
-            break;
-        }
-        case hash("y"):
-        {
-            tag->comps.y = comp;
-            break;
-        }
-        case hash("z"):
-        {
-            tag->comps.z = comp;
-
-            break;
-        }
-        }
-
-        stackIter += 2;
-    }
-
-    readerMemBufferAllocate += sizeof(ShaderComputeLayoutXMLTag);
-
-    return ret;
-}
-
-
 ID3D12RootSignature* CreateRootSignatureFromShaderGraph(ShaderGraph* graph)
 {
     UINT numDescriptorsTables = graph->resourceSetCount, numRootParameters = graph->resourceSetCount, numOfRanges = graph->resourceCount;
@@ -4061,7 +2349,7 @@ ID3D12RootSignature* CreateRootSignatureFromShaderGraph(ShaderGraph* graph)
         case ShaderResourceType::CONSTANT_BUFFER:
            
             break;
-        case ShaderResourceType::IMAGESTORE2D:
+        case ShaderResourceType::IMAGE2D:
 
             break;
         }
@@ -4096,7 +2384,7 @@ ID3D12RootSignature* CreateRootSignatureFromShaderGraph(ShaderGraph* graph)
             rangeCount[resource->set] += 1;
             break;
         }
-        case ShaderResourceType::IMAGESTORE2D:
+        case ShaderResourceType::IMAGE2D:
         {
             CD3DX12_DESCRIPTOR_RANGE* range = &ranges[rangeParameterIndex++];
             range->Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, srvIndex++);
@@ -4276,36 +2564,6 @@ int CreateDescriptorTable(uintptr_t header, int descriptorCount, int frameCount,
 }
 
 
-#pragma pack(push, 1)
-typedef struct BitmapFileHeader
-{
-    uint16_t  bfType;
-    uint32_t  bfSize;
-    uint16_t  bfReserved1;
-    uint16_t  bfReserved2;
-    uint32_t  bfOffBits;
-} BitmapFileHeader;
-
-typedef struct BitmapInfoHeader
-{
-    uint32_t biSize;
-    uint32_t biWidth;
-    uint32_t biHeight;
-    uint16_t biPlanes;
-    uint16_t biBitCount;
-    uint32_t biCompression;
-    uint32_t biSizeImage;
-    uint32_t biXPelsPerMeter;
-    uint32_t biYPelsPerMeter;
-    uint32_t biClrUsed;
-    uint32_t biClrImportant;
-} BitmapInfoHeader;
-#pragma pack(pop)
-
-static_assert(sizeof(BitmapFileHeader) == 14, "no match for bfh");
-static_assert(sizeof(BitmapInfoHeader) == 40, "no match for bih");
-
-
 void ParseBMP(TextureDetails* details, const char* name)
 {
     char* data = nullptr; 
@@ -4401,6 +2659,8 @@ void CreateTablesFromResourceSet(int* descriptorsets, int numDescriptorSet, Pipe
     uintptr_t dx12Sampler = (uintptr_t)AllocFromTemp(512, 4);
     uintptr_t dx12SamplerPtr = dx12Sampler;
 
+    int descriptorTableCount = numDescriptorSet;
+
     for (int i = 0; i < numDescriptorSet; i++)
     {
         
@@ -4424,7 +2684,7 @@ void CreateTablesFromResourceSet(int* descriptorsets, int numDescriptorSet, Pipe
 
             switch (header->type)
             {
-            case ShaderResourceType::IMAGESTORE2D:
+            case ShaderResourceType::IMAGE2D:
             {
                 ShaderResourceImage* image = (ShaderResourceImage*)header;
                 DescriptorTypeImageSRV* srv = (DescriptorTypeImageSRV*)dx12Ptr;
@@ -4523,5 +2783,239 @@ void CreateTablesFromResourceSet(int* descriptorsets, int numDescriptorSet, Pipe
         obj->descriptorHeapPointer[numDescriptorSet] = CreateDescriptorTable(dx12Sampler, samplerCount, MAX_FRAMES_IN_FLIGHT, &mainSamplerDescriptorHeap);
         obj->resourceCount[numDescriptorSet] = samplerCount;
         obj->descriptorHeapSelection[numDescriptorSet] = 1;
+        descriptorTableCount++;
     }
+
+    obj->descriptorTableCount = descriptorTableCount;
+}
+
+ID3D12Heap* CreateDX12Heap(SIZE_T size, SIZE_T alignment, D3D12_HEAP_FLAGS heapFlags, D3D12_HEAP_TYPE heapType)
+{
+
+    D3D12_HEAP_DESC heapDesc = {};
+    heapDesc.SizeInBytes = size;
+    heapDesc.Alignment = alignment; //D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT;
+    heapDesc.Flags = heapFlags;//D3D12_HEAP_FLAG_ALLOW_ONLY_BUFFERS; // or TEXTURES
+    heapDesc.Properties.Type = heapType;
+    heapDesc.Properties.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_UNKNOWN;
+    heapDesc.Properties.MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN;
+    heapDesc.Properties.CreationNodeMask = 1;
+    heapDesc.Properties.VisibleNodeMask = 1;
+
+    ID3D12Heap* heap;
+
+    deviceHandle->CreateHeap(&heapDesc, IID_PPV_ARGS(&heap));
+
+    return heap;
+}
+
+void CreateTextureMemoryPool(TextureMemoryPool* pool, size_t sizeOfPool, size_t alignment)
+{
+
+    alignment = (alignment + D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT - 1) & ~(D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT - 1);
+
+    pool->heap = CreateDX12Heap(sizeOfPool, alignment, D3D12_HEAP_FLAG_ALLOW_ONLY_NON_RT_DS_TEXTURES, D3D12_HEAP_TYPE_DEFAULT);
+    pool->sizeOfHeap = sizeOfPool;
+    pool->currentPointer = 0ui64;
+    pool->alignment = alignment;
+}
+
+
+void CreateDSVRSVMemoryPool(TextureMemoryPool* pool, size_t sizeOfPool, size_t alignment, bool msaa)
+{
+    alignment = (alignment + D3D12_DEFAULT_MSAA_RESOURCE_PLACEMENT_ALIGNMENT - 1) & ~(D3D12_DEFAULT_MSAA_RESOURCE_PLACEMENT_ALIGNMENT - 1);
+
+    pool->heap = CreateDX12Heap(sizeOfPool, alignment, D3D12_HEAP_FLAG_ALLOW_ONLY_RT_DS_TEXTURES, D3D12_HEAP_TYPE_DEFAULT);
+    pool->sizeOfHeap = sizeOfPool;
+    pool->currentPointer = 0ui64;
+    pool->alignment = alignment;
+}
+
+ShaderGraph* ShaderGraphReader::CreateShaderGraph(
+    const std::string& filename
+)
+{
+
+    uintptr_t TreeNodes[50]{};
+    int SetNodes[15]{};
+    int ShaderRefs[5]{};
+    ShaderDetails* details[5]{};
+
+    OSFileHandle fileHandle;
+
+    auto ret = OSOpenFile(filename.c_str(), READ, &fileHandle);
+
+    if (ret)
+    {
+        throw std::runtime_error("Shader Init file is unable to be opened");
+    }
+
+    char* data = (char*)AllocFromTemp(fileHandle.fileLength, 64);
+
+    shaderGraphSize = fileHandle.fileLength;
+
+    OSReadFile(&fileHandle, fileHandle.fileLength, data);
+
+    OSCloseFile(&fileHandle);
+
+    int shaderCount = 0;
+    int shaderResourceCount = 0;
+    int setCount = 0;
+
+    int lastShader = 0;
+    int shaderDetailDataStride = 0;
+
+    int tagCount = 0;
+    int curr = 0;
+
+    int stride = SkipLine(data, curr);
+    curr += stride;
+
+    while (curr + stride < shaderGraphSize)
+    {
+
+        unsigned long hashl = 0;
+        bool opening = true;
+        stride = ProcessTag(data, curr, &hashl, &opening);
+        curr += stride;
+
+        stride = SkipLine(data, curr);
+
+        if (opening)
+        {
+            tagCount++;
+        }
+
+
+
+        switch (hashl)
+        {
+        case hash("ShaderGraph"):
+            //std::cout << "ShaderGraph" << std::endl;
+            if (!opening)
+                curr = shaderGraphSize;
+            break;
+
+        case hash("HLSLShader"):
+            //std::cout << "GLSLShader" << std::endl;
+            if (opening) {
+                curr += stride;
+                stride = SkipLine(data, curr);
+                shaderCount++;
+            }
+            break;
+
+        case hash("ShaderResourceSet"):
+            //std::cout << "ShaderResourceSet" << std::endl;
+            if (opening) {
+                SetNodes[setCount] = tagCount;
+                setCount++;
+            }
+            break;
+        case hash("ShaderResourceItem"):
+            //std::cout << "ShaderResourceItem" << std::endl;
+            if (opening) {
+                stride = HandleShaderResourceItem(data, curr, &TreeNodes[tagCount]);
+                shaderResourceCount++;
+            }
+            break;
+        case hash("ComputeLayout"):
+            //std::cout << "ComputeLayout" << std::endl;
+            if (opening) {
+                stride = HandleComputeLayout(data, curr, &TreeNodes[tagCount]);
+            }
+
+            break;
+        }
+
+        curr += stride;
+
+
+    }
+
+
+
+    ShaderGraph* graph = (ShaderGraph*)(AllocFromTemp(sizeof(ShaderGraph) + (setCount * sizeof(ShaderSetLayout)) + (shaderResourceCount * sizeof(ShaderResource)) + (shaderCount * sizeof(ShaderMap)), 4));
+
+    memset(graph, 0, sizeof(ShaderGraph) + (setCount * sizeof(ShaderSetLayout)) + (shaderResourceCount * sizeof(ShaderResource)));
+
+    graph->shaderMapCount = shaderCount;
+    graph->resourceSetCount = setCount;
+
+    /*
+    int shaderIndex = 0;
+
+    for (int j = 0; j < shaderCount; j++)
+    {
+        ShaderMap* map = (ShaderMap*)graph->GetMap(j);
+
+        ShaderGLSLShaderXMLTag* tag = (ShaderGLSLShaderXMLTag*)TreeNodes[ShaderRefs[j]];
+
+        ShaderStageType type = tag->type;
+
+        if (type == ShaderStageTypeBits::COMPUTESHADERSTAGE)
+        {
+            ShaderComputeLayoutXMLTag* ctag = (ShaderComputeLayoutXMLTag*)TreeNodes[ShaderRefs[j] + 1];
+            ShaderDetails* deats = details[j];
+            ShaderComputeLayout* layout = (ShaderComputeLayout*)deats->GetShaderData();
+            layout->x = ctag->comps.x;
+            layout->y = ctag->comps.y;
+            layout->z = ctag->comps.z;
+        }
+
+        map->type = type;
+
+
+    }
+    */
+
+    int resourceIter = 0;
+
+    for (int i = 0; i < setCount; i++)
+    {
+
+        ShaderSetLayout* setLay = (ShaderSetLayout*)graph->GetSet(i);
+        int resIter = SetNodes[i] + 1;
+        ShaderResourceItemXMLTag* tag = (ShaderResourceItemXMLTag*)TreeNodes[resIter];
+        int bindingCount = 0;
+
+        setLay->resourceStart = resourceIter;
+        while (tag && tag->hashCode == hash("ShaderResourceItem"))
+        {
+
+            ShaderResource* resource = (ShaderResource*)graph->GetResource(resourceIter++);
+            if (tag->resourceType == ShaderResourceType::CONSTANT_BUFFER)
+            {
+                resource->binding = ~0;
+            }
+            else
+            {
+                resource->binding = bindingCount;
+            }
+
+            resource->stages = tag->shaderstage;
+
+            resource->action = tag->resourceAction;
+            resource->type = tag->resourceType;
+            resource->arrayCount = tag->arrayCount;
+            resource->set = i;
+            resource->size = tag->size;
+            resource->offset = tag->offset;
+            setLay->bindingCount++;
+
+
+            if (!(tag->resourceType == ShaderResourceType::CONSTANT_BUFFER))
+            {
+                bindingCount++;
+            }
+
+            tag = (ShaderResourceItemXMLTag*)TreeNodes[++resIter];
+        }
+    }
+
+    graph->resourceCount = resourceIter;
+
+    readerMemBufferAllocate = 0;
+
+    return graph;
 }

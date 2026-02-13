@@ -150,6 +150,8 @@ XCOPY "$(SolutionDir)VS.bin" "$(OutDir)" /K /Y</Command>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="d3dx12.h" />
+    <ClInclude Include="Files.h" />
+    <ClInclude Include="Types.h" />
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="basicvertex.hlsl">
