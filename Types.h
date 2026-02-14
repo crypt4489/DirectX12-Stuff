@@ -920,12 +920,12 @@ struct ShaderResourceBufferBarrier : public ShaderResourceBarrier
 
 struct ShaderResourceSampler : public ShaderResourceHeader
 {
-    void* samplerHandle;
+    size_t samplerHandle;
 };
 
 struct ShaderResourceImage : public ShaderResourceHeader
 {
-    void* textureHandle;
+    size_t textureHandle;
 };
 
 struct ShaderResourceSamplerBindless : public ShaderResourceHeader
@@ -986,7 +986,7 @@ void BindBufferToShaderResource(int descriptorSet, int allocationIndex, int bind
     header->offset = offset;
 }
 
-void BindImageResourceToShaderResource(int descriptorSet, void* index, int bindingIndex)
+void BindImageResourceToShaderResource(int descriptorSet, size_t index, int bindingIndex)
 {
     uintptr_t head = descriptorSets[descriptorSet];
     ShaderResourceSet* set = (ShaderResourceSet*)head;
@@ -994,13 +994,13 @@ void BindImageResourceToShaderResource(int descriptorSet, void* index, int bindi
 
     ShaderResourceImage* header = (ShaderResourceImage*)offsets[bindingIndex];
 
-    if (header->type != ShaderResourceType::IMAGESTORE2D || header->type != ShaderResourceType::IMAGE2D)
+    if (header->type != ShaderResourceType::IMAGESTORE2D && header->type != ShaderResourceType::IMAGE2D)
         return;
 
     header->textureHandle = index;
 }
 
-void BindSamplerResourceToShaderResource(int descriptorSet, void* index, int bindingIndex)
+void BindSamplerResourceToShaderResource(int descriptorSet, size_t index, int bindingIndex)
 {
     uintptr_t head = descriptorSets[descriptorSet];
     ShaderResourceSet* set = (ShaderResourceSet*)head;
@@ -1014,7 +1014,7 @@ void BindSamplerResourceToShaderResource(int descriptorSet, void* index, int bin
     header->samplerHandle = index;
 }
 
-void BindSampledImageToShaderResource(int descriptorSet, void* index, int bindingIndex)
+void BindSampledImageToShaderResource(int descriptorSet, size_t index, int bindingIndex)
 {
     uintptr_t head = descriptorSets[descriptorSet];
     ShaderResourceSet* set = (ShaderResourceSet*)head;

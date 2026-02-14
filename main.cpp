@@ -55,6 +55,7 @@ enum DX12ComType
     D12ROOTSIGNATURE = 6,
     D12PIPELINESTATE = 7,
     D12COMMANDPOOL = 8,
+    D12RESOURCEVIEW = 9,
 };
 
 typedef size_t EntryHandle;
@@ -257,6 +258,13 @@ UINT globalDSVDescriptorSize;
 UINT currentFrame;
 
 
+struct D12Fence
+{
+    EntryHandle fenceHandle;
+    uint64_t fenceValue;
+    HANDLE fenceEvent;
+};
+
 ID3D12Fence* g_Fence;
 
 uint64_t g_FenceValue = 0;
@@ -291,7 +299,7 @@ struct ShaderHandles
 
 ShaderHandles shaderHandles[2]{};
 
-ID3D12Resource* bgraImageMemoryPool;
+EntryHandle bgraImageMemoryPool;
 
 struct TextureDetails
 {
@@ -304,7 +312,7 @@ struct TextureDetails
 
 struct DriverMemoryBuffer
 {
-    ID3D12Resource* bufferHandle;
+    EntryHandle bufferHandle;
     size_t sizeOfAlloc;
     size_t currentPointer;
     D3D12_RESOURCE_STATES currentState;
@@ -372,6 +380,7 @@ void ReleaseD3D12Resources();
 int CreateDepthStencilView(ID3D12Device2* device, ID3D12DescriptorHeap* descriptorHeap, TextureMemoryPool* pool, ID3D12Resource** outBuffers, UINT dsvDescriptorSize);
 EntryHandle CreateShaderBlob(const char* shaderfile);
 void CreateHostBuffer(DriverMemoryBuffer* dmb, UINT size, D3D12_RESOURCE_FLAGS flags);
+void CreateDeviceBuffer(DriverMemoryBuffer* dmb, UINT size, D3D12_RESOURCE_FLAGS flags);
 ID3D12Resource* CreateDeviceLocalBuffer(ID3D12Device2* device, UINT size, D3D12_RESOURCE_FLAGS flags);
 void WriteToHostMemory(int allocationIndex, void* data, size_t size, size_t offset, int copies);
 void WriteToDeviceLocalMemory(int allocationIndex, void* data, size_t size, size_t offset, int copies);
@@ -379,6 +388,8 @@ void WriteToDeviceLocalMemory(int allocationIndex, void* data, size_t size, size
 ID3D12Resource* CreateCommittedImageResource(ID3D12Device2* device, UINT width, UINT height, UINT depth, UINT mips, D3D12_RESOURCE_FLAGS flags, DXGI_FORMAT format, D3D12_RESOURCE_DIMENSION dimension);
 
 ID3D12Resource* CreatePlacedImageResource(ID3D12Device2* device, TextureMemoryPool* pool, UINT width, UINT height, UINT depth, UINT mips, D3D12_RESOURCE_FLAGS flags, DXGI_FORMAT format, D3D12_RESOURCE_DIMENSION dimension);
+
+EntryHandle CreatePlacedImageResource(TextureMemoryPool* pool, UINT width, UINT height, UINT depth, UINT mips, D3D12_RESOURCE_FLAGS flags, DXGI_FORMAT format, D3D12_RESOURCE_DIMENSION dimension);
 
 
 
@@ -411,12 +422,12 @@ struct PipelineObject
     D3D_PRIMITIVE_TOPOLOGY topology;//D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST
     int instanceCount;
     
-    ID3D12Resource* vertexBuffer;
+    EntryHandle vertexBuffer = ~0ui64;
     UINT vertexBufferOffset;
     UINT vertexBufferSize;
     int vertexSize;
     int vertexCount;
-    ID3D12Resource* indexBuffer;
+    EntryHandle indexBuffer = ~0ui64;
     UINT indexBufferOffset;
     UINT indexBufferSize;
     int indexSize;
@@ -475,7 +486,7 @@ struct Allocation
     size_t alignment; 
     size_t stridesize; //amount of memory taken up per copy
     size_t requestedsize;
-    ID3D12Resource* bufferHandle;
+    EntryHandle bufferHandle;
     size_t totalDeviceAlloc;
 };
 
@@ -512,7 +523,7 @@ struct DescriptorTypeUniformBuffer : public DescriptorTypeHeader
 struct DescriptorTypeImageSRV : public DescriptorTypeHeader
 {
     DXGI_FORMAT format;
-    ID3D12Resource* image;
+    EntryHandle image;
 };
 
 void CreateDescriptorHeapManager(DescriptorHeap* heap, UINT maxDescriptorHandles, D3D12_DESCRIPTOR_HEAP_TYPE type, D3D12_DESCRIPTOR_HEAP_FLAGS flags);
@@ -673,7 +684,9 @@ void DoSceneStuff()
 
     ID3D12GraphicsCommandList7* transCmdBuffer = (ID3D12GraphicsCommandList7*)GetAndValidateItem(transferCommandBuffer, D12COMMANDBUFFER7);
 
-    TransitionBufferBarrier(transCmdBuffer, deviceLocalBuffer.bufferHandle, D3D12_BARRIER_SYNC_NONE, D3D12_BARRIER_ACCESS_NO_ACCESS, D3D12_BARRIER_SYNC_COPY, D3D12_BARRIER_ACCESS_COPY_DEST);
+    ID3D12Resource* deviceLocalHandle = (ID3D12Resource*)GetAndValidateItem(deviceLocalBuffer.bufferHandle, D12RESOURCEVIEW);
+
+    TransitionBufferBarrier(transCmdBuffer, deviceLocalHandle, D3D12_BARRIER_SYNC_NONE, D3D12_BARRIER_ACCESS_NO_ACCESS, D3D12_BARRIER_SYNC_COPY, D3D12_BARRIER_ACCESS_COPY_DEST);
 
     WriteToDeviceLocalMemory(vertexOffset, BoxVerts, sizeof(BoxVerts), 0, 1);
 
@@ -685,11 +698,13 @@ void DoSceneStuff()
 
     WriteToDeviceLocalMemory(world2Data, &world[1], 64, 0, MAX_FRAMES_IN_FLIGHT);
 
-    TransitionBufferBarrier(transCmdBuffer, deviceLocalBuffer.bufferHandle, D3D12_BARRIER_SYNC_COPY, D3D12_BARRIER_ACCESS_COPY_DEST, D3D12_BARRIER_SYNC_DRAW | D3D12_BARRIER_SYNC_INDEX_INPUT, D3D12_BARRIER_ACCESS_VERTEX_BUFFER | D3D12_BARRIER_ACCESS_CONSTANT_BUFFER | D3D12_BARRIER_ACCESS_INDEX_BUFFER);
+    TransitionBufferBarrier(transCmdBuffer, deviceLocalHandle, D3D12_BARRIER_SYNC_COPY, D3D12_BARRIER_ACCESS_COPY_DEST, D3D12_BARRIER_SYNC_DRAW | D3D12_BARRIER_SYNC_INDEX_INPUT, D3D12_BARRIER_ACCESS_VERTEX_BUFFER | D3D12_BARRIER_ACCESS_CONSTANT_BUFFER | D3D12_BARRIER_ACCESS_INDEX_BUFFER);
 
-    bgraImageMemoryPool = CreatePlacedImageResource(deviceHandle, &bgraPool, details.width, details.height, 1, details.miplevels, D3D12_RESOURCE_FLAG_NONE, details.type, D3D12_RESOURCE_DIMENSION_TEXTURE2D);
+    bgraImageMemoryPool = CreatePlacedImageResource(&bgraPool, details.width, details.height, 1, details.miplevels, D3D12_RESOURCE_FLAG_NONE, details.type, D3D12_RESOURCE_DIMENSION_TEXTURE2D);
 
-    WriteToImageDeviceLocalMemory(bgraImageMemoryPool, details.data, details.width, details.height, 4, details.dataSize, details.type, details.miplevels, 1);
+    ID3D12Resource* imageHandle = (ID3D12Resource*)GetAndValidateItem(bgraImageMemoryPool, D12RESOURCEVIEW);
+
+    WriteToImageDeviceLocalMemory(imageHandle, details.data, details.width, details.height, 4, details.dataSize, details.type, details.miplevels, 1);
 
     int camSRVDS = AllocateShaderResourceSet(mainLayout, 0, MAX_FRAMES_IN_FLIGHT);
 
@@ -873,7 +888,7 @@ int main()
 
     CreateHostBuffer(&hostBuffer, 8 * KiB, D3D12_RESOURCE_FLAG_NONE);
 
-    deviceLocalBuffer.bufferHandle = CreateDeviceLocalBuffer(deviceHandle, 8 * KiB, D3D12_RESOURCE_FLAG_NONE);
+    CreateDeviceBuffer(&deviceLocalBuffer, 8 * KiB, D3D12_RESOURCE_FLAG_NONE);
 
     for (UINT i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
     {
@@ -1023,22 +1038,6 @@ void ReleaseD3D12Resources()
 {
 
     ReleaseAllDriverCOMHandles();
-
-
-    if (bgraImageMemoryPool)
-        bgraImageMemoryPool->Release();
-
-    if (hostBuffer.bufferHandle)
-        hostBuffer.bufferHandle->Release();
-
-    if (deviceLocalBuffer.bufferHandle)
-        deviceLocalBuffer.bufferHandle->Release();
-
-    for (UINT i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
-    {
-        if (stagingBuffers[i].bufferHandle)
-            stagingBuffers[i].bufferHandle->Release();
-    }
 
  
     if (g_Fence && queueHandle)
@@ -1796,23 +1795,27 @@ int Render()
         }
 
 
-        if (triangles[i].vertexBuffer != NULL)
+        if (triangles[i].vertexBuffer != ~0ui64)
         {
             D3D12_VERTEX_BUFFER_VIEW vertexView{};
 
-            vertexView.BufferLocation = triangles[i].vertexBuffer->GetGPUVirtualAddress() + triangles[i].vertexBufferOffset;
+            ID3D12Resource* vertexBuffer = (ID3D12Resource*)GetAndValidateItem(triangles[i].vertexBuffer, D12RESOURCEVIEW);
+
+            vertexView.BufferLocation = vertexBuffer->GetGPUVirtualAddress() + triangles[i].vertexBufferOffset;
             vertexView.SizeInBytes = triangles[i].vertexBufferSize;
             vertexView.StrideInBytes = triangles[i].vertexSize;
 
             gCommandBuffer->IASetVertexBuffers(0, 1, &vertexView);
         }
 
-        if (triangles[i].indexBuffer != NULL)
+        if (triangles[i].indexBuffer != ~0ui64)
         {
         
             D3D12_INDEX_BUFFER_VIEW indexView{};
 
-            indexView.BufferLocation = triangles[i].indexBuffer->GetGPUVirtualAddress() + triangles[i].indexBufferOffset;
+            ID3D12Resource* indexBuffer = (ID3D12Resource*)GetAndValidateItem(triangles[i].indexBuffer, D12RESOURCEVIEW);
+
+            indexView.BufferLocation = indexBuffer->GetGPUVirtualAddress() + triangles[i].indexBufferOffset;
             indexView.SizeInBytes = triangles[i].indexBufferSize;
             indexView.Format = (triangles[i].indexSize == 2) ? DXGI_FORMAT_R16_UINT : DXGI_FORMAT_R32_UINT;
 
@@ -1934,10 +1937,21 @@ void CreateHostBuffer(DriverMemoryBuffer* dmb, UINT size, D3D12_RESOURCE_FLAGS f
 
     dmb->currentState = dmb->initialState = D3D12_RESOURCE_STATE_GENERIC_READ;
  
-    dmb->bufferHandle = buffer;
+    dmb->bufferHandle = AllocTypeForEntry(buffer, D12RESOURCEVIEW);
 
 }
 
+void CreateDeviceBuffer(DriverMemoryBuffer* dmb, UINT size, D3D12_RESOURCE_FLAGS flags)
+{
+    dmb->sizeOfAlloc = size;
+    dmb->currentPointer = 0;
+
+    ID3D12Resource* resource = CreateDeviceLocalBuffer(deviceHandle, size, flags);
+
+    dmb->bufferHandle = AllocTypeForEntry(resource, D12RESOURCEVIEW);
+
+    dmb->currentState = dmb->initialState = D3D12_RESOURCE_STATE_GENERIC_READ;
+}
 
 ID3D12Resource* CreateDeviceLocalBuffer(ID3D12Device2* device, UINT size, D3D12_RESOURCE_FLAGS flags)
 {
@@ -2050,7 +2064,11 @@ ID3D12Resource* CreatePlacedImageResource(ID3D12Device2* device, TextureMemoryPo
     return imageHandle;
 }
 
-
+EntryHandle CreatePlacedImageResource(TextureMemoryPool* pool, UINT width, UINT height, UINT depth, UINT mips, D3D12_RESOURCE_FLAGS flags, DXGI_FORMAT format, D3D12_RESOURCE_DIMENSION dimension)
+{
+    ID3D12Resource* resource = CreatePlacedImageResource(deviceHandle, pool, width, height, depth, mips, flags, format, dimension);
+    return AllocTypeForEntry(resource, D12RESOURCEVIEW);
+}
 
 void TransitionBufferBarrier(ID3D12GraphicsCommandList7* cmdBuffer, ID3D12Resource* resource, D3D12_BARRIER_SYNC srcSync, D3D12_BARRIER_ACCESS srcAccess,  D3D12_BARRIER_SYNC dstSync, D3D12_BARRIER_ACCESS dstAccess)
 {
@@ -2083,7 +2101,9 @@ void WriteToDeviceLocalMemory(int allocationIndex, void* data, size_t size, size
 
     size_t allocLoc = AllocFromDriverMemoryBuffer(&stagingBuffers[currentFrame], stride*copies, alloc->alignment);
 
-    ID3D12Resource* stagingBuffer = stagingBuffers[currentFrame].bufferHandle;
+    ID3D12Resource* stagingBuffer = (ID3D12Resource*)GetAndValidateItem(stagingBuffers[currentFrame].bufferHandle, D12RESOURCEVIEW);
+
+    ID3D12Resource* dstBuffer = (ID3D12Resource*)GetAndValidateItem(alloc->bufferHandle, D12RESOURCEVIEW);
 
 	stagingBuffer->Map(0, nullptr, &mappedData);
 
@@ -2096,7 +2116,7 @@ void WriteToDeviceLocalMemory(int allocationIndex, void* data, size_t size, size
 	}
 	stagingBuffer->Unmap(0, nullptr);
 
-	transCommandBuffer->CopyBufferRegion(alloc->bufferHandle, alloc->offset + offset, stagingBuffer, allocLoc, stride * copies);
+	transCommandBuffer->CopyBufferRegion(dstBuffer, alloc->offset + offset, stagingBuffer, allocLoc, stride * copies);
 
 	transferCommandsUploaded++;
 }
@@ -2109,7 +2129,7 @@ void WriteToImageDeviceLocalMemory(ID3D12Resource* imageHandle, char* data, UINT
 
     size_t allocLoc = AllocFromDriverMemoryBuffer(&stagingBuffers[currentFrame], stride*height, 255);
 
-    ID3D12Resource* stagingBuffer = stagingBuffers[currentFrame].bufferHandle;
+    ID3D12Resource* stagingBuffer = (ID3D12Resource*)GetAndValidateItem(stagingBuffers[currentFrame].bufferHandle, D12RESOURCEVIEW);
 
     stagingBuffer->Map(0, nullptr, &mappedData);
 
@@ -2321,7 +2341,10 @@ void WriteToHostMemory(int allocationIndex, void* data, size_t size, size_t offs
  
     Allocation* alloc = &allocationHandle[allocationIndex];
 
-    alloc->bufferHandle->Map(0, nullptr, &mappedData);
+    ID3D12Resource* buffer = (ID3D12Resource*)GetAndValidateItem(alloc->bufferHandle, D12RESOURCEVIEW);
+
+
+    buffer->Map(0, nullptr, &mappedData);
 
     uintptr_t cdata = (uintptr_t)(mappedData);
 
@@ -2334,7 +2357,7 @@ void WriteToHostMemory(int allocationIndex, void* data, size_t size, size_t offs
     }
 
 
-    alloc->bufferHandle->Unmap(0, nullptr);
+    buffer->Unmap(0, nullptr);
 
 }
 
@@ -2646,7 +2669,9 @@ int CreateDescriptorTable(uintptr_t header, int descriptorCount, int frameCount,
 
                 Allocation* alloc = &allocationHandle[cbType->allocationIndex];
 
-                CreateCBVDescriptorHandle(deviceHandle, alloc->bufferHandle, i * alloc->stridesize + alloc->offset, alloc->stridesize , heap);
+                ID3D12Resource* constant = (ID3D12Resource*)GetAndValidateItem(alloc->bufferHandle, D12RESOURCEVIEW);
+
+                CreateCBVDescriptorHandle(deviceHandle, constant, i * alloc->stridesize + alloc->offset, alloc->stridesize , heap);
 
                 ptr += sizeof(DescriptorTypeConstantBuffer);
                 break;
@@ -2656,8 +2681,11 @@ int CreateDescriptorTable(uintptr_t header, int descriptorCount, int frameCount,
                 DescriptorTypeUniformBuffer* ubType = (DescriptorTypeUniformBuffer*)header;
 
                 Allocation* alloc = &allocationHandle[ubType->allocationIndex];
+
+                ID3D12Resource* ubv = (ID3D12Resource*)GetAndValidateItem(alloc->bufferHandle, D12RESOURCEVIEW);
+
                 CreateSRVDescriptorHandle(deviceHandle,
-                    alloc->bufferHandle, i * alloc->stridesize + alloc->offset,
+                    ubv, i * alloc->stridesize + alloc->offset,
                     ubType->numberOfElements, alloc->requestedsize,
                     ubType->format,
                     heap,
@@ -2672,9 +2700,11 @@ int CreateDescriptorTable(uintptr_t header, int descriptorCount, int frameCount,
             {
                 DescriptorTypeImageSRV* ubType = (DescriptorTypeImageSRV*)header;
 
-     
+                
+                ID3D12Resource* image = (ID3D12Resource*)GetAndValidateItem(ubType->image, D12RESOURCEVIEW);
+
                 CreateImageSRVDescriptorHandle(deviceHandle,
-                    ubType->image,
+                    image,
                     1,
                     ubType->format,
                     heap,
@@ -2823,7 +2853,7 @@ void CreateTablesFromResourceSet(int* descriptorsets, int numDescriptorSet, Pipe
                 DescriptorTypeImageSRV* srv = (DescriptorTypeImageSRV*)dx12Ptr;
                 srv->type = IMAGESRV;
                 srv->format = DXGI_FORMAT_B8G8R8A8_UNORM_SRGB;
-                srv->image = bgraImageMemoryPool;
+                srv->image = image->textureHandle;
 
                 dx12Ptr += sizeof(DescriptorTypeImageSRV);
                 currentTableCount++;
