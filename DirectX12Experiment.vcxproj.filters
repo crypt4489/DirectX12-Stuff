@@ -35,5 +35,6 @@
   </ItemGroup>
   <ItemGroup>
     <Xml Include="DirectLayout.xml" />
+    <Xml Include="GenericPipeline.xml" />
   </ItemGroup>
 </Project>

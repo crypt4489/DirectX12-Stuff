@@ -26,7 +26,8 @@ enum class VertexUsage
     TEX3 = 4,
     NORMAL = 5,
     BONES = 6,
-    WEIGHTS = 7
+    WEIGHTS = 7,
+    COLOR0 = 8
 };
 
 
@@ -130,68 +131,59 @@ struct ShaderComputeLayout
     unsigned long z;
 };
 
-struct ShaderGraphReader
+
+struct ShaderXMLTag
 {
-    struct ShaderXMLTag
-    {
-        unsigned long hashCode;
-    };
-
-    struct ShaderGLSLShaderXMLTag : ShaderXMLTag //followed by shaderNameLen Bytes
-    {
-        ShaderStageType type;
-    };
-
-    struct ShaderComputeLayoutXMLTag : ShaderXMLTag
-    {
-        ShaderComputeLayout comps;
-    };
-
-    struct ShaderResourceItemXMLTag : ShaderXMLTag
-    {
-        ShaderStageType shaderstage;
-        ShaderResourceType resourceType;
-        ShaderResourceAction resourceAction;
-        int arrayCount;
-        int size;
-        int offset;
-    };
-
-    struct ShaderResourceSetXMLTag : ShaderXMLTag
-    {
-        int resourceCount;
-    };
-
-    static constexpr unsigned long
-        hash(char* str);
-
-    static constexpr unsigned long
-        hash(const std::string& string);
-
-
-    static ShaderGraph* CreateShaderGraph(const std::string& filename);
-
-    static int ProcessTag(char* fileData, int currentLocation, unsigned long* hash, bool* opening);
-
-    static int SkipLine(char* fileData, int currentLocation);
-    static int ReadValue(char* fileData, int currentLocation, char* str, int* len);
-
-    static int ReadAttributeName(char* fileData, int currentLocation, unsigned long* hash);
-
-    static int ReadAttributeValueHash(char* fileData, int currentLocation, unsigned long* hash);
-
-    static int ReadAttributeValueVal(char* fileData, int currentLocation, unsigned long* val);
-
-    static int ReadAttributes(char* fileData, int currentLocation, unsigned long* hashes, int* stackSize, int valType);
-
-    static int HandleGLSLShader(char* fileData, int currentLocation, uintptr_t* offset, void* shaderData, int* shaderDataSize);
-
-    static int HandleShaderResourceItem(char* fileData, int currentLocation, uintptr_t* offset);
-
-    static constexpr int ASCIIToInt(char* str);
-
-    static int HandleComputeLayout(char* fileData, int currentLocation, uintptr_t* offset);
+    unsigned long hashCode;
 };
+struct ShaderGLSLShaderXMLTag : ShaderXMLTag //followed by shaderNameLen Bytes
+{
+    ShaderStageType type;
+};
+struct ShaderComputeLayoutXMLTag : ShaderXMLTag
+{
+    ShaderComputeLayout comps;
+};
+struct ShaderResourceItemXMLTag : ShaderXMLTag
+{
+    ShaderStageType shaderstage;
+    ShaderResourceType resourceType;
+    ShaderResourceAction resourceAction;
+    int arrayCount;
+    int size;
+    int offset;
+};
+struct ShaderResourceSetXMLTag : ShaderXMLTag
+{
+    int resourceCount;
+};
+static constexpr unsigned long
+hash(char* str);
+
+static constexpr unsigned long
+hash(const std::string& string);
+static ShaderGraph* CreateShaderGraph(const std::string& filename);
+static int ProcessTag(char* fileData, int size, int currentLocation, unsigned long* hash, bool* opening);
+
+static int SkipLine(char* fileData, int size, int currentLocation);
+static int ReadValue(char* fileData, int size, int currentLocation, char* str, int* len);
+
+static int ReadAttributeName(char* fileData, int size, int currentLocation, unsigned long* hash);
+
+static int ReadAttributeValueHash(char* fileData, int size, int currentLocation, unsigned long* hash);
+
+static int ReadAttributeValueVal(char* fileData, int size, int currentLocation, unsigned long* val);
+
+static int ReadAttributes(char* fileData, int size, int currentLocation, unsigned long* hashes, int* stackSize);
+
+static int HandleGLSLShader(char* fileData, int size, int currentLocation, uintptr_t* offset, void* shaderData, int* shaderDataSize);
+
+static int HandleShaderResourceItem(char* fileData, int size, int currentLocation, uintptr_t* offset);
+
+static constexpr int ASCIIToInt(char* str);
+
+static int HandleComputeLayout(char* fileData, int size, int currentLocation, uintptr_t* offset);
+
 
 
 #pragma pack(push, 1)
@@ -286,7 +278,7 @@ void* ShaderDetails::GetShaderData()
 }
 
 constexpr unsigned long
-ShaderGraphReader::hash(char* str)
+hash(char* str)
 {
     unsigned long hash = 5381;
     int c;
@@ -300,7 +292,7 @@ ShaderGraphReader::hash(char* str)
 }
 
 constexpr unsigned long
-ShaderGraphReader::hash(const std::string& string)
+hash(const std::string& string)
 {
     unsigned long hash = 5381;
     int c;
@@ -320,11 +312,10 @@ char readerMemBuffer[64 * 1024];
 size_t readerMemBufferAllocate = 0;
 
 
-int ShaderGraphReader::ProcessTag(char* fileData, int currentLocation, unsigned long* hash, bool* opening)
+int ProcessTag(char* fileData, int size, int currentLocation, unsigned long* hash, bool* opening)
 {
     int count = 0;
     char* data = fileData + currentLocation;
-    size_t size = shaderGraphSize;
 
     unsigned long hashl = 5381;
 
@@ -365,17 +356,17 @@ int ShaderGraphReader::ProcessTag(char* fileData, int currentLocation, unsigned 
     return count;
 }
 
-int ShaderGraphReader::SkipLine(char* fileData, int currentLocation)
+int SkipLine(char* fileData, int size, int currentLocation)
 {
     int count = 0;
     char* data = fileData + currentLocation;
-    size_t size = shaderGraphSize;
+
     while (currentLocation + count < size && data[count++] != '\n');
     data = fileData + currentLocation + count;
     return count;
 }
 
-int ShaderGraphReader::ReadValue(char* fileData, int currentLocation, char* str, int* len)
+int ReadValue(char* fileData, int size, int currentLocation, char* str, int* len)
 {
     int memCounter = 0;
     int count = 0;
@@ -406,7 +397,7 @@ int ShaderGraphReader::ReadValue(char* fileData, int currentLocation, char* str,
     return count;
 }
 #define MAX_ATTRIBUTE_LEN 50
-int ShaderGraphReader::ReadAttributeName(char* fileData, int currentLocation, unsigned long* hash)
+int ReadAttributeName(char* fileData, int size, int currentLocation, unsigned long* hash)
 {
     int count = 0;
     char* data = fileData + currentLocation;
@@ -444,7 +435,7 @@ int ShaderGraphReader::ReadAttributeName(char* fileData, int currentLocation, un
     return count;
 }
 
-int ShaderGraphReader::ReadAttributeValueHash(char* fileData, int currentLocation, unsigned long* hash)
+int ReadAttributeValueHash(char* fileData, int size, int currentLocation, unsigned long* hash)
 {
     int count = 0;
     char* data = fileData + currentLocation;
@@ -487,12 +478,13 @@ int ShaderGraphReader::ReadAttributeValueHash(char* fileData, int currentLocatio
     return count;
 }
 
-int ShaderGraphReader::ReadAttributeValueVal(char* fileData, int currentLocation, unsigned long* val)
+int ReadAttributeValueVal(char* fileData, int size, int currentLocation, unsigned long* val)
 {
     int count = 0;
     char* data = fileData + currentLocation;
 
     unsigned long out = 0;
+    bool readingVal = false;
 
     while (true)
     {
@@ -508,20 +500,24 @@ int ShaderGraphReader::ReadAttributeValueVal(char* fileData, int currentLocation
 
         if (std::isspace(c))
         {
-            if (out == 0)
-                continue;
-            else
+            if (readingVal)
                 break;
+            continue;
         }
 
         if (c == '\"' || c == '\'')
+        {
+            if (readingVal)
+                break;
             continue;
+        }
 
         if (count == (MAX_ATTRIBUTE_LEN + currentLocation) || ((c - '0') < 0 || (c - '9') > 0)) {
             throw std::runtime_error("malformed xml attribute");
         }
 
         out = (out * 10) + (c - '0');
+        readingVal = true;
 
     }
 
@@ -532,18 +528,17 @@ int ShaderGraphReader::ReadAttributeValueVal(char* fileData, int currentLocation
 
 #define MAX_ATTRIBUTE_LINE_LEN 200
 
-int ShaderGraphReader::ReadAttributes(char* fileData, int currentLocation, unsigned long* hashes, int* stackSize, int valType)
+int ReadAttributes(char* fileData, int size, int currentLocation, unsigned long* hashes, int* stackSize)
 {
     int count = 0;
     char* data = fileData + currentLocation;
-    size_t size = shaderGraphSize;
 
     int ret = 0;
     char c = data[ret];
 
     while (c != '>' && ret < MAX_ATTRIBUTE_LINE_LEN && (currentLocation + ret) < size)
     {
-        ret += ReadAttributeName(fileData, currentLocation + ret, &hashes[count]);
+        ret += ReadAttributeName(fileData, size, currentLocation + ret, &hashes[count]);
 
         switch (hashes[count])
         {
@@ -551,7 +546,7 @@ int ShaderGraphReader::ReadAttributes(char* fileData, int currentLocation, unsig
         case hash("used"):
         case hash("rw"):
         {
-            ret += ReadAttributeValueHash(fileData, currentLocation + ret, &hashes[count + 1]);
+            ret += ReadAttributeValueHash(fileData, size, currentLocation + ret, &hashes[count + 1]);
             break;
         }
         case hash("offset"):
@@ -561,7 +556,7 @@ int ShaderGraphReader::ReadAttributes(char* fileData, int currentLocation, unsig
         case hash("y"):
         case hash("z"):
         {
-            ret += ReadAttributeValueVal(fileData, currentLocation + ret, &hashes[count + 1]);
+            ret += ReadAttributeValueVal(fileData, size, currentLocation + ret, &hashes[count + 1]);
             break;
         }
         }
@@ -581,13 +576,13 @@ int ShaderGraphReader::ReadAttributes(char* fileData, int currentLocation, unsig
 
 
 
-int ShaderGraphReader::HandleGLSLShader(char* fileData, int currentLocation, uintptr_t* offset, void* shaderData, int* shaderDataSize)
+int HandleGLSLShader(char* fileData, int size, int currentLocation, uintptr_t* offset, void* shaderData, int* shaderDataSize)
 {
     unsigned long hashes[6];
 
-    int size = 0;
+    int glslSize = 0;
 
-    int ret = ReadAttributes(fileData, currentLocation, hashes, &size, 0);
+    int ret = ReadAttributes(fileData, size, currentLocation, hashes, &glslSize);
 
     uintptr_t detailHead = (uintptr_t)shaderData;
 
@@ -602,11 +597,11 @@ int ShaderGraphReader::HandleGLSLShader(char* fileData, int currentLocation, uin
 
     *offset = (uintptr_t)tag;
 
-    tag->hashCode = hash("HLSLShader");
+    tag->hashCode = hash("GLSLShader");
 
     int stackIter = 0;
 
-    while (size > stackIter)
+    while (glslSize > stackIter)
     {
         unsigned long code = hashes[stackIter];
         unsigned long codeV = hashes[stackIter + 1];
@@ -641,20 +636,20 @@ int ShaderGraphReader::HandleGLSLShader(char* fileData, int currentLocation, uin
 
     readerMemBufferAllocate += sizeof(ShaderGLSLShaderXMLTag);
 
-    ret += ReadValue(fileData, currentLocation + ret, details->GetString(), &details->shaderNameSize);
+    ret += ReadValue(fileData, size, currentLocation + ret, details->GetString(), &details->shaderNameSize);
 
     *shaderDataSize = (sizeof(ShaderDetails) + details->shaderNameSize + details->shaderDataSize);
 
     return ret;
 }
 
-int ShaderGraphReader::HandleShaderResourceItem(char* fileData, int currentLocation, uintptr_t* offset)
+int HandleShaderResourceItem(char* fileData, int size, int currentLocation, uintptr_t* offset)
 {
     unsigned long hashes[12];
 
-    int size = 0;
+    int dataSize = 0;
 
-    int ret = ReadAttributes(fileData, currentLocation, hashes, &size, 0);
+    int ret = ReadAttributes(fileData, size, currentLocation, hashes, &dataSize);
 
     ShaderResourceItemXMLTag* tag = (ShaderResourceItemXMLTag*)&readerMemBuffer[readerMemBufferAllocate];
 
@@ -666,7 +661,7 @@ int ShaderGraphReader::HandleShaderResourceItem(char* fileData, int currentLocat
 
     int stackIter = 0;
 
-    while (size > stackIter)
+    while (dataSize > stackIter)
     {
         unsigned long code = hashes[stackIter];
         unsigned long codeV = hashes[stackIter + 1];
@@ -703,10 +698,6 @@ int ShaderGraphReader::HandleShaderResourceItem(char* fileData, int currentLocat
                 break;
             case hash("constantbuffer"):
                 tag->resourceType = ShaderResourceType::CONSTANT_BUFFER;
-                tag->resourceAction = ShaderResourceAction::SHADERREAD;
-                break;
-            case hash("sampler2dBindless"):
-                tag->resourceType = ShaderResourceType::SAMPLERBINDLESS;
                 tag->resourceAction = ShaderResourceAction::SHADERREAD;
                 break;
             case hash("sampler3d"):
@@ -789,7 +780,7 @@ int ShaderGraphReader::HandleShaderResourceItem(char* fileData, int currentLocat
 }
 
 
-constexpr int ShaderGraphReader::ASCIIToInt(char* str)
+constexpr int ASCIIToInt(char* str)
 {
     int c;
     int out = 0;
@@ -801,57 +792,6 @@ constexpr int ShaderGraphReader::ASCIIToInt(char* str)
 
     return out;
 }
-
-int ShaderGraphReader::HandleComputeLayout(char* fileData, int currentLocation, uintptr_t* offset)
-{
-    unsigned long hashesAndVals[6];
-
-    int size = 0;
-
-    int ret = ReadAttributes(fileData, currentLocation, hashesAndVals, &size, 1);
-
-    ShaderComputeLayoutXMLTag* tag = (ShaderComputeLayoutXMLTag*)&readerMemBuffer[readerMemBufferAllocate];
-
-    *offset = (uintptr_t)tag;
-
-    tag->hashCode = hash("ComputeLayout");
-
-    int stackIter = 0;
-
-    while (size > stackIter)
-    {
-        unsigned long code = hashesAndVals[stackIter];
-        unsigned long comp = hashesAndVals[stackIter + 1];
-
-        switch (code)
-        {
-        case hash("x"):
-        {
-            tag->comps.x = comp;
-
-            break;
-        }
-        case hash("y"):
-        {
-            tag->comps.y = comp;
-            break;
-        }
-        case hash("z"):
-        {
-            tag->comps.z = comp;
-
-            break;
-        }
-        }
-
-        stackIter += 2;
-    }
-
-    readerMemBufferAllocate += sizeof(ShaderComputeLayoutXMLTag);
-
-    return ret;
-}
-
 enum class ImageLayout
 {
     UNDEFINED = 0,
@@ -1367,3 +1307,821 @@ int AllocateShaderResourceSet(ShaderGraph* graph, uint32_t targetSet, int setCou
 
     return ret;
 }
+
+enum RenderingBackend
+{
+    VULKAN = 1,
+    DXD12 = 2,
+};
+
+enum RasterizerTest
+{
+    NEVER = 0,
+    LESS = 1,
+    EQUAL = 2,
+    LESSEQUAL = 3,
+    GREATER = 4,
+    NOTEQUAL = 5,
+    GREATEREQUAL = 6,
+    ALLPASS = 7
+};
+
+enum ImageFormat
+{
+    X8L8U8V8 = 0,
+    DXT1 = 1,
+    DXT3 = 2,
+    R8G8B8A8 = 3,
+    B8G8R8A8 = 4,
+    D24UNORMS8STENCIL = 5,
+    D32FLOATS8STENCIL = 6,
+    D32FLOAT = 7,
+    R8G8B8A8_UNORM = 8,
+    R8G8B8 = 9,
+    B8G8R8A8_UNORM = 10,
+    IMAGE_UNKNOWN = 0x7fffffff
+};
+
+enum TextureIOType
+{
+    BMP = 0,
+};
+
+enum PrimitiveType
+{
+    TRIANGLES = 0,
+    TRISTRIPS = 6,
+    TRIFAN = 7,
+    POINTSLIST = 8,
+    LINELIST = 9,
+    LINESTRIPS = 10
+};
+
+enum class VertexBufferRate
+{
+    PERVERTEX = 0,
+    PERINSTANCE = 1,
+};
+
+struct VertexInputDescription
+{
+    ComponentFormatType format;
+    int byteoffset;
+    VertexUsage vertexusage;
+};
+
+struct VertexBufferDescription
+{
+    VertexBufferRate rate;
+    int descCount;
+    int perInputSize;
+    VertexInputDescription descriptions[10];
+};
+
+enum TriangleWinding
+{
+    CW = 0,
+    CCW = 1
+};
+
+enum class CullMode
+{
+    CULL_NONE = 0,
+    CULL_BACK = 1,
+    CULL_FRONT = 2,
+};
+
+enum class BlendOp
+{
+    LOGIC_COPY = 1
+};
+
+enum class StencilOp
+{
+    REPLACE = 0,
+    KEEP = 1,
+    ZERO = 2,
+};
+
+struct FaceStencilData
+{
+    StencilOp failOp;
+    StencilOp passOp;
+    StencilOp depthFailOp;
+    RasterizerTest stencilCompare;
+    int writeMask;
+    int compareMask;
+    int reference;
+};
+
+struct GenericPipelineStateInfo
+{
+    PrimitiveType primType;
+    float lineWidth;
+    TriangleWinding windingOrder;
+    bool depthEnable;
+    bool depthWrite;
+    RasterizerTest depthTest;
+    bool StencilEnable;
+    FaceStencilData frontFace;
+    FaceStencilData backFace;
+    int sampleCountLow;
+    int sampleCountHigh;
+    ImageFormat colorFormat;
+    ImageFormat depthFormat;
+    BlendOp blendOp;
+    CullMode cullMode;
+    int vertexBufferDescCount;
+    VertexBufferDescription vertexBufferDesc[4];
+};
+
+struct PipelineXMLTag
+{
+    unsigned long hashCode;
+};
+
+struct PipelineDescriptionXMLTag : PipelineXMLTag //followed by shaderNameLen Bytes
+{
+    int sampLo;
+    int sampHi;
+};
+
+struct PrimitiveXMLTag : PipelineXMLTag
+{
+    PrimitiveType primType;
+};
+
+struct DepthXMLTag : PipelineXMLTag
+{
+    bool enabled;
+    RasterizerTest depthOp;
+};
+
+struct CullModeXMLTag : PipelineXMLTag
+{
+    CullMode mode;
+};
+
+
+int HandleComputeLayout(char* fileData, int size, int currentLocation, uintptr_t* offset)
+{
+    unsigned long hashesAndVals[6];
+
+    int dataSize = 0;
+
+    int ret = ReadAttributes(fileData, size, currentLocation, hashesAndVals, &dataSize);
+
+    ShaderComputeLayoutXMLTag* tag = (ShaderComputeLayoutXMLTag*)&readerMemBuffer[readerMemBufferAllocate];
+
+    *offset = (uintptr_t)tag;
+
+    tag->hashCode = hash("ComputeLayout");
+
+    int stackIter = 0;
+
+    while (dataSize > stackIter)
+    {
+        unsigned long code = hashesAndVals[stackIter];
+        unsigned long comp = hashesAndVals[stackIter + 1];
+
+        switch (code)
+        {
+        case hash("x"):
+        {
+            tag->comps.x = comp;
+
+            break;
+        }
+        case hash("y"):
+        {
+            tag->comps.y = comp;
+            break;
+        }
+        case hash("z"):
+        {
+            tag->comps.z = comp;
+
+            break;
+        }
+        }
+
+        stackIter += 2;
+    }
+
+    readerMemBufferAllocate += sizeof(ShaderComputeLayoutXMLTag);
+
+    return ret;
+}
+
+
+
+int ReadAttributesPipeline(char* fileData, int size, int currentLocation, unsigned long* hashes, int* stackSize)
+{
+    int count = 0;
+    char* data = fileData + currentLocation;
+
+    int ret = 0;
+    char c = data[ret];
+
+    while (c != '>' && ret < MAX_ATTRIBUTE_LINE_LEN && (currentLocation + ret) < size)
+    {
+        ret += ReadAttributeName(fileData, size, currentLocation + ret, &hashes[count]);
+
+        switch (hashes[count])
+        {
+        case hash("op"):
+        case hash("type"):
+        case hash("mode"):
+        case hash("format"):
+        case hash("usage"):
+        case hash("rate"):
+        case hash("winding"):
+        case hash("write"):
+        case hash("failop"):
+        case hash("passop"):
+        case hash("depthfailop"):
+        case hash("compareop"):
+        {
+            ret += ReadAttributeValueHash(fileData, size, currentLocation + ret, &hashes[count + 1]);
+            break;
+        }
+        case hash("writemask"):
+        case hash("comparemask"):
+        case hash("ref"):
+        case hash("offset"):
+        case hash("sampLo"):
+        case hash("sampHi"):
+        case hash("size"):
+        {
+            ret += ReadAttributeValueVal(fileData, size, currentLocation + ret, &hashes[count + 1]);
+            break;
+        }
+        }
+        c = data[ret];
+        count += 2;
+    }
+
+    *stackSize = count;
+
+    while (c != '\n' && ret < MAX_ATTRIBUTE_LINE_LEN && (currentLocation + ret) < size)
+    {
+        c = data[ret++];
+    }
+
+    return ret;
+}
+
+static int HandlePipelineDescription(char* fileData, int size, int currentLocation, GenericPipelineStateInfo* stateInfo)
+{
+    unsigned long hashes[6];
+
+    int attrSize = 0;
+
+    int ret = ReadAttributesPipeline(fileData, size, currentLocation, hashes, &attrSize);
+
+    int stackIter = 0;
+
+    while (attrSize > stackIter)
+    {
+        unsigned long code = hashes[stackIter];
+        unsigned long codeV = hashes[stackIter + 1];
+
+        switch (code)
+        {
+        case hash("sampLo"):
+        {
+            stateInfo->sampleCountLow = codeV;
+            break;
+        }
+        case hash("sampHi"):
+        {
+            stateInfo->sampleCountHigh = codeV;
+            break;
+        }
+
+        default:
+            throw std::runtime_error("Failed Pipeline Description");
+            break;
+        }
+
+        stackIter += 2;
+    }
+
+    return ret;
+}
+
+int HandleCullMode(char* fileData, int size, int currentLocation, GenericPipelineStateInfo* stateInfo)
+{
+    unsigned long hashes[6];
+
+    int attrSize = 0;
+
+    int ret = ReadAttributesPipeline(fileData, size, currentLocation, hashes, &attrSize);
+
+    int stackIter = 0;
+
+    while (attrSize > stackIter)
+    {
+        unsigned long code = hashes[stackIter];
+        unsigned long codeV = hashes[stackIter + 1];
+
+        switch (code)
+        {
+        case hash("mode"):
+        {
+            switch (codeV)
+            {
+            case hash("none"):
+                stateInfo->cullMode = CullMode::CULL_NONE;
+                break;
+
+            case hash("back"):
+                stateInfo->cullMode = CullMode::CULL_BACK;
+                break;
+
+            case hash("front"):
+                stateInfo->cullMode = CullMode::CULL_FRONT;
+                break;
+
+            default:
+                throw std::runtime_error("Invalid Cull Mode");
+            }
+            break;
+        }
+        case hash("winding"):
+        {
+            switch (codeV)
+            {
+            case hash("cw"):
+                stateInfo->windingOrder = TriangleWinding::CW;
+                break;
+
+            case hash("ccw"):
+                stateInfo->windingOrder = TriangleWinding::CCW;
+                break;
+
+            default:
+                throw std::runtime_error("Invalid Winding");
+            }
+            break;
+        }
+
+        default:
+            throw std::runtime_error("Failed Cull");
+        }
+
+        stackIter += 2;
+    }
+
+    return ret;
+}
+
+int HandleDepthTest(char* fileData, int size, int currentLocation, GenericPipelineStateInfo* stateInfo)
+{
+    unsigned long hashes[6];
+
+    int attrSize = 0;
+
+    int ret = ReadAttributesPipeline(fileData, size, currentLocation, hashes, &attrSize);
+
+    int stackIter = 0;
+
+    stateInfo->depthEnable = true;
+
+    while (attrSize > stackIter)
+    {
+        unsigned long code = hashes[stackIter];
+        unsigned long codeV = hashes[stackIter + 1];
+
+        switch (code)
+        {
+        case hash("write"):
+        {
+            switch (codeV)
+            {
+            case hash("true"):
+            {
+                stateInfo->depthWrite = true;
+                break;
+            }
+            case hash("false"):
+            {
+                stateInfo->depthWrite = false;
+                break;
+            }
+            }
+            break;
+        }
+
+        case hash("op"):
+        {
+            switch (codeV)
+            {
+            case hash("never"):
+                stateInfo->depthTest = NEVER;
+                break;
+
+            case hash("less"):
+                stateInfo->depthTest = LESS;
+                break;
+
+            case hash("equal"):
+                stateInfo->depthTest = EQUAL;
+                break;
+
+            case hash("lessequal"):
+                stateInfo->depthTest = LESSEQUAL;
+                break;
+
+            case hash("greater"):
+                stateInfo->depthTest = GREATER;
+                break;
+
+            case hash("notequal"):
+                stateInfo->depthTest = NOTEQUAL;
+                break;
+
+            case hash("greaterequal"):
+                stateInfo->depthTest = GREATEREQUAL;
+                break;
+
+            case hash("always"):
+                stateInfo->depthTest = ALLPASS;
+                break;
+
+            default:
+                throw std::runtime_error("Invalid Depth Compare Op");
+            }
+            break;
+        }
+
+        default:
+            throw std::runtime_error("Failed Depth Mode");
+        }
+
+        stackIter += 2;
+    }
+
+    return ret;
+}
+
+StencilOp ParseStencilOp(uint32_t codeV)
+{
+    switch (codeV)
+    {
+    case hash("replace"): return StencilOp::REPLACE;
+    case hash("keep"):    return StencilOp::KEEP;
+    case hash("zero"):    return StencilOp::ZERO;
+    default:              return StencilOp::KEEP;
+    }
+}
+
+static int HandleStencilTest(char* fileData, int size, int currentLocation, FaceStencilData* face)
+{
+    unsigned long hashes[14];
+
+    int attrSize = 0;
+
+    int ret = ReadAttributesPipeline(fileData, size, currentLocation, hashes, &attrSize);
+
+    int stackIter = 0;
+
+    while (attrSize > stackIter)
+    {
+        unsigned long code = hashes[stackIter];
+        unsigned long codeV = hashes[stackIter + 1];
+
+        switch (code)
+        {
+
+        case hash("failop"):
+            face->failOp = ParseStencilOp(codeV);
+            break;
+
+        case hash("passop"):
+            face->passOp = ParseStencilOp(codeV);
+            break;
+
+
+        case hash("depthfailop"):
+            face->depthFailOp = ParseStencilOp(codeV);
+            break;
+
+
+        case hash("compareop"):
+        {
+            switch (codeV)
+            {
+            case hash("never"):
+                face->stencilCompare = NEVER;
+                break;
+
+            case hash("less"):
+                face->stencilCompare = LESS;
+                break;
+
+            case hash("equal"):
+                face->stencilCompare = EQUAL;
+                break;
+
+            case hash("lessequal"):
+                face->stencilCompare = LESSEQUAL;
+                break;
+
+            case hash("greater"):
+                face->stencilCompare = GREATER;
+                break;
+
+            case hash("notequal"):
+                face->stencilCompare = NOTEQUAL;
+                break;
+
+            case hash("greaterequal"):
+                face->stencilCompare = GREATEREQUAL;
+                break;
+
+            case hash("always"):
+                face->stencilCompare = ALLPASS;
+                break;
+
+            default:
+                throw std::runtime_error("Invalid Stencil Compare Op");
+            }
+            break;
+        }
+
+        case hash("writemask"):
+        {
+            face->writeMask = codeV;
+            break;
+        }
+
+        case hash("comparemask"):
+        {
+            face->compareMask = codeV;
+            break;
+        }
+
+        case hash("ref"):
+        {
+            face->reference = codeV;
+            break;
+        }
+
+        default:
+            throw std::runtime_error("Failed Depth Mode");
+        }
+
+        stackIter += 2;
+    }
+
+    return ret;
+}
+
+int HandlePrimitiveType(char* fileData, int size, int currentLocation, GenericPipelineStateInfo* stateInfo)
+{
+    unsigned long hashes[6];
+
+    int attrSize = 0;
+
+    int ret = ReadAttributesPipeline(fileData, size, currentLocation, hashes, &attrSize);
+
+    int stackIter = 0;
+
+    while (attrSize > stackIter)
+    {
+        unsigned long code = hashes[stackIter];
+        unsigned long codeV = hashes[stackIter + 1];
+
+        switch (code)
+        {
+        case hash("type"):
+        {
+            switch (codeV)
+            {
+            case hash("trilists"):
+                stateInfo->primType = TRIANGLES;
+                break;
+
+            case hash("tristrips"):
+                stateInfo->primType = TRISTRIPS;
+                break;
+
+            case hash("trifans"):
+                stateInfo->primType = TRIFAN;
+                break;
+
+            case hash("points"):
+                stateInfo->primType = POINTSLIST;
+                break;
+
+            case hash("linelists"):
+                stateInfo->primType = LINELIST;
+                break;
+
+            case hash("linestrips"):
+                stateInfo->primType = LINESTRIPS;
+                break;
+
+            default:
+                throw std::runtime_error("Invalid Primitive Type");
+            }
+            break;
+        }
+        case hash("size"):
+        {
+            stateInfo->lineWidth = (float)codeV;
+            break;
+        }
+
+        default:
+            throw std::runtime_error("Failed Prim Mode");
+        }
+
+        stackIter += 2;
+    }
+
+    return ret;
+}
+
+int HandleVertexComponentInput(char* fileData, int size, int currentLocation, GenericPipelineStateInfo* stateInfo, int vertexBufferInputLocation, int perVertexSlotLocation)
+{
+    unsigned long hashes[8];
+
+    int attrSize = 0;
+
+    int ret = ReadAttributesPipeline(fileData, size, currentLocation, hashes, &attrSize);
+
+    int stackIter = 0;
+
+    while (attrSize > stackIter)
+    {
+        unsigned long code = hashes[stackIter];
+        unsigned long codeV = hashes[stackIter + 1];
+
+        switch (code)
+        {
+        case hash("usage"):
+        {
+            switch (codeV)
+            {
+            case hash("POS0"):
+                stateInfo->vertexBufferDesc[vertexBufferInputLocation].descriptions[perVertexSlotLocation].vertexusage = VertexUsage::POSITION;
+                break;
+
+            case hash("TEX0"):
+                stateInfo->vertexBufferDesc[vertexBufferInputLocation].descriptions[perVertexSlotLocation].vertexusage = VertexUsage::TEX0;
+                break;
+
+            case hash("TEX1"):
+                stateInfo->vertexBufferDesc[vertexBufferInputLocation].descriptions[perVertexSlotLocation].vertexusage = VertexUsage::TEX1;
+                break;
+
+            case hash("TEX2"):
+                stateInfo->vertexBufferDesc[vertexBufferInputLocation].descriptions[perVertexSlotLocation].vertexusage = VertexUsage::TEX2;
+                break;
+
+            case hash("TEX3"):
+                stateInfo->vertexBufferDesc[vertexBufferInputLocation].descriptions[perVertexSlotLocation].vertexusage = VertexUsage::TEX3;
+                break;
+
+            case hash("NORMAL"):
+                stateInfo->vertexBufferDesc[vertexBufferInputLocation].descriptions[perVertexSlotLocation].vertexusage = VertexUsage::NORMAL;
+                break;
+
+            case hash("BONES"):
+                stateInfo->vertexBufferDesc[vertexBufferInputLocation].descriptions[perVertexSlotLocation].vertexusage = VertexUsage::BONES;
+                break;
+
+            case hash("WEIGHTS"):
+                stateInfo->vertexBufferDesc[vertexBufferInputLocation].descriptions[perVertexSlotLocation].vertexusage = VertexUsage::WEIGHTS;
+                break;
+
+            case hash("COLOR0"):
+                stateInfo->vertexBufferDesc[vertexBufferInputLocation].descriptions[perVertexSlotLocation].vertexusage = VertexUsage::COLOR0;
+                break;
+
+            default:
+                throw std::runtime_error("Invalid vertex usage");
+            }
+            break;
+        }
+
+        case hash("format"):
+        {
+            switch (codeV)
+            {
+            case hash("uint"):
+                stateInfo->vertexBufferDesc[vertexBufferInputLocation].descriptions[perVertexSlotLocation].format = ComponentFormatType::R32_UINT;
+                break;
+
+            case hash("int"):
+                stateInfo->vertexBufferDesc[vertexBufferInputLocation].descriptions[perVertexSlotLocation].format = ComponentFormatType::R32_SINT;
+                break;
+
+            case hash("vec4"):
+                stateInfo->vertexBufferDesc[vertexBufferInputLocation].descriptions[perVertexSlotLocation].format = ComponentFormatType::R32G32B32A32_SFLOAT;
+                break;
+
+            case hash("vec3"):
+                stateInfo->vertexBufferDesc[vertexBufferInputLocation].descriptions[perVertexSlotLocation].format = ComponentFormatType::R32G32B32_SFLOAT;
+                break;
+
+            case hash("vec2"):
+                stateInfo->vertexBufferDesc[vertexBufferInputLocation].descriptions[perVertexSlotLocation].format = ComponentFormatType::R32G32_SFLOAT;
+                break;
+
+            case hash("float"):
+                stateInfo->vertexBufferDesc[vertexBufferInputLocation].descriptions[perVertexSlotLocation].format = ComponentFormatType::R32_SFLOAT;
+                break;
+
+            case hash("ivec2"):
+                stateInfo->vertexBufferDesc[vertexBufferInputLocation].descriptions[perVertexSlotLocation].format = ComponentFormatType::R32G32_SINT;
+                break;
+
+            case hash("u8vec2"):
+                stateInfo->vertexBufferDesc[vertexBufferInputLocation].descriptions[perVertexSlotLocation].format = ComponentFormatType::R8G8_UINT;
+                break;
+
+            case hash("i16vec2"):
+                stateInfo->vertexBufferDesc[vertexBufferInputLocation].descriptions[perVertexSlotLocation].format = ComponentFormatType::R16G16_SINT;
+                break;
+
+            case hash("i16vec3"):
+                stateInfo->vertexBufferDesc[vertexBufferInputLocation].descriptions[perVertexSlotLocation].format = ComponentFormatType::R16G16B16_SINT;
+                break;
+
+            default:
+                throw std::runtime_error("Invalid vertex format");
+            }
+            break;
+        }
+
+        case hash("offset"):
+        {
+            stateInfo->vertexBufferDesc[vertexBufferInputLocation].descriptions[perVertexSlotLocation].byteoffset = codeV;
+            break;
+        }
+
+        default:
+            throw std::runtime_error("Failed Vertex Component");
+        }
+
+        stackIter += 2;
+    }
+
+    return ret;
+}
+
+int HandleVertexInput(char* fileData, int size, int currentLocation, GenericPipelineStateInfo* stateInfo, int vertexBufferInputLocation)
+{
+    unsigned long hashes[6];
+
+    int attrSize = 0;
+
+    int ret = ReadAttributesPipeline(fileData, size, currentLocation, hashes, &attrSize);
+
+    int stackIter = 0;
+
+    while (attrSize > stackIter)
+    {
+        unsigned long code = hashes[stackIter];
+        unsigned long codeV = hashes[stackIter + 1];
+
+        switch (code)
+        {
+        case hash("rate"):
+        {
+            switch (codeV)
+            {
+            case hash("vertex"):
+            {
+                stateInfo->vertexBufferDesc[vertexBufferInputLocation].rate = VertexBufferRate::PERVERTEX;
+                break;
+            }
+            case hash("instance"):
+            {
+                stateInfo->vertexBufferDesc[vertexBufferInputLocation].rate = VertexBufferRate::PERINSTANCE;
+                break;
+            }
+            }
+            break;
+        }
+        case hash("size"):
+        {
+            stateInfo->vertexBufferDesc[vertexBufferInputLocation].perInputSize = codeV;
+            break;
+        }
+
+        default:
+            throw std::runtime_error("Failed Vertex Input");
+            break;
+        }
+
+        stackIter += 2;
+    }
+
+    return ret;
+}
+
+void CreatePipelineDescription(const std::string& filename, GenericPipelineStateInfo* stateInfo);

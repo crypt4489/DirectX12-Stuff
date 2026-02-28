@@ -165,6 +165,7 @@ XCOPY "$(SolutionDir)VS.bin" "$(OutDir)" /K /Y</Command>
   </ItemGroup>
   <ItemGroup>
     <Xml Include="DirectLayout.xml" />
+    <Xml Include="GenericPipeline.xml" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

@@ -109,13 +109,6 @@ void* AllocFromPermanent(size_t size, size_t alignment)
     return (void*)&globalMemoryPool[current];
 }
 
-struct VertexInputDescription
-{
-    ComponentFormatType format;
-    int byteoffset;
-    VertexUsage vertexusage;
-};
-
 const char* ConvertToSemanticName(VertexUsage usage, UINT* sematicIndex)
 {
     switch (usage)
@@ -197,16 +190,36 @@ DXGI_FORMAT ConvertToDXGIFormat(ComponentFormatType format)
     }
 }
 
-void ConvertVertexLayoutToD3D12InputDesc(VertexInputDescription* inputVertexDesc, D3D12_INPUT_ELEMENT_DESC* desc, int vertexbufferid)
+
+D3D12_INPUT_CLASSIFICATION ConvertVertexRateToD3D12InputClass(VertexBufferRate rate)
+{
+    D3D12_INPUT_CLASSIFICATION classification = D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA;
+
+    switch (rate)
+    {
+    case VertexBufferRate::PERVERTEX:
+        break;
+    case VertexBufferRate::PERINSTANCE:
+        classification = D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA;
+        break;
+    default:
+        break;
+    }
+
+    return classification;
+}
+
+
+void ConvertVertexLayoutToD3D12InputDesc(VertexInputDescription* inputVertexDesc, D3D12_INPUT_ELEMENT_DESC* desc, D3D12_INPUT_CLASSIFICATION inputRate, UINT instanceUseRate, UINT vertexbufferid)
 {
     DXGI_FORMAT currFormat = ConvertToDXGIFormat(inputVertexDesc->format);
 
     desc->Format = currFormat;
-    desc->InputSlotClass = D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA;
+    desc->InputSlotClass = inputRate;
     desc->SemanticName = ConvertToSemanticName(inputVertexDesc->vertexusage, &desc->SemanticIndex);
     desc->InputSlot = vertexbufferid;
     desc->AlignedByteOffset = inputVertexDesc->byteoffset;
-    desc->InstanceDataStepRate = 0;
+    desc->InstanceDataStepRate = instanceUseRate;
 }
 
 
@@ -316,7 +329,8 @@ ID3D12CommandQueue* CreateCommandQueue(ID3D12Device2* device, D3D12_COMMAND_LIST
 EntryHandle CreateCommandQueue(D3D12_COMMAND_LIST_TYPE type);
 
 
-
+D3D12_PRIMITIVE_TOPOLOGY_TYPE ToD3D12TopologyType(PrimitiveType type);
+D3D12_PRIMITIVE_TOPOLOGY ToD3D12Topology(PrimitiveType type);
 
 
 
@@ -417,14 +431,17 @@ struct PipelineObject
 
 PipelineObject triangles[2];
 
-ID3D12PipelineState* CreatePipelineStateObject(ID3D12Device2* device, ID3D12RootSignature* _rootSignature, ShaderHandles* handles, int count);
+ID3D12PipelineState* CreatePipelineStateObject(ID3D12Device2* device, ID3D12RootSignature* _rootSignature, ShaderHandles* handles, int count, GenericPipelineStateInfo* stateInfo);
 
-EntryHandle CreatePipelineStateObject(EntryHandle _rootSignature, ShaderHandles* handles, int count);
+EntryHandle CreatePipelineStateObject(EntryHandle _rootSignature, ShaderHandles* handles, int count, GenericPipelineStateInfo* stateInfo);
 
 
 EntryHandle CreateRootSignature(CD3DX12_ROOT_PARAMETER* rootParameters, UINT parameterCount, D3D12_ROOT_SIGNATURE_FLAGS flags);
 ID3D12RootSignature* CreateRootSignature(ID3D12Device2* device, CD3DX12_ROOT_PARAMETER* rootParameters, UINT parameterCount, D3D12_ROOT_SIGNATURE_FLAGS flags);
 
+
+DXGI_FORMAT ToDXGIFormat(ImageFormat format);
+D3D12_CULL_MODE ToD3D12CullMode(CullMode mode);
 
 size_t AllocFromDriverMemoryBuffer(DriverMemoryBuffer* dmb, size_t allocSize, size_t alignment)
 {
@@ -457,6 +474,12 @@ struct DescriptorHeap
 DescriptorHeap mainSRVDescriptorHeap;
 DescriptorHeap mainSamplerDescriptorHeap;
 
+
+struct ImageHandle
+{
+    EntryHandle memHeap;
+    EntryHandle imageViewHandle;
+};
 
 struct Allocation
 {
@@ -642,13 +665,21 @@ void DoSceneStuff()
 
     CreateTextureMemoryPool(&bgraPool, 256 * MiB, D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT);
 
-    ShaderGraph* mainLayout = ShaderGraphReader::CreateShaderGraph("DirectLayout.xml");
+    ShaderGraph* mainLayout = CreateShaderGraph("DirectLayout.xml" );
 
     
 
     triangles[0].rootSignature = CreateRootSignatureFromShaderGraph(mainLayout);//CreateGenericRootSignature();
 
-    triangles[0].pipelineState = CreatePipelineStateObject(triangles[0].rootSignature, shaderHandles, 2);
+
+    GenericPipelineStateInfo pipeInfo{};
+
+    CreatePipelineDescription("GenericPipeline.xml", &pipeInfo);
+
+    pipeInfo.colorFormat = ImageFormat::R8G8B8A8;
+    pipeInfo.depthFormat = ImageFormat::D32FLOAT;
+
+    triangles[0].pipelineState = CreatePipelineStateObject(triangles[0].rootSignature, shaderHandles, 2, &pipeInfo);
 
 
     TextureDetails details{};
@@ -708,7 +739,7 @@ void DoSceneStuff()
     ID3D12DescriptorHeap* srvHeap = (ID3D12DescriptorHeap*)GetAndValidateItem(mainSRVDescriptorHeap.descriptorHeap, D12DESCRIPTORHEAP);
     ID3D12DescriptorHeap* samplerHeap = (ID3D12DescriptorHeap*)GetAndValidateItem(mainSamplerDescriptorHeap.descriptorHeap, D12DESCRIPTORHEAP);
     
-    triangles[0].topology = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+    triangles[0].topology = ToD3D12Topology(pipeInfo.primType);
     triangles[0].heapsCount = 2;
     triangles[0].instanceCount = 1;
     triangles[0].vertexCount = 24;
@@ -717,7 +748,7 @@ void DoSceneStuff()
     triangles[0].descriptorHeap[1] = samplerHeap;
 
 
-    triangles[1].topology = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+    triangles[1].topology = ToD3D12Topology(pipeInfo.primType);
     triangles[1].heapsCount = 2;
     triangles[1].instanceCount = 1;
     triangles[1].vertexCount = 24;
@@ -953,16 +984,251 @@ EntryHandle CreateShaderBlob(const char* shaderfile)
     
 }
 
-EntryHandle CreatePipelineStateObject(EntryHandle _rootSignature, ShaderHandles* handles, int count)
+EntryHandle CreatePipelineStateObject(EntryHandle _rootSignature, ShaderHandles* handles, int count, GenericPipelineStateInfo* stateInfo)
 {
 
     ID3D12RootSignature* rootSignH = (ID3D12RootSignature*)GetAndValidateItem(_rootSignature, D12ROOTSIGNATURE);
-    ID3D12PipelineState* pipelineState = CreatePipelineStateObject(deviceHandle, rootSignH, handles, count);
+    ID3D12PipelineState* pipelineState = CreatePipelineStateObject(deviceHandle, rootSignH, handles, count, stateInfo);
 
     return AllocTypeForEntry(pipelineState, D12PIPELINESTATE);
 }
 
-ID3D12PipelineState* CreatePipelineStateObject(ID3D12Device2* device, ID3D12RootSignature* _rootSignature, ShaderHandles* handles, int count)
+D3D12_PRIMITIVE_TOPOLOGY ToD3D12Topology(PrimitiveType type)
+{
+    D3D12_PRIMITIVE_TOPOLOGY topology = D3D_PRIMITIVE_TOPOLOGY_UNDEFINED;
+
+    switch (type)
+    {
+    case TRIANGLES:
+        topology = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+        break;
+
+    case TRISTRIPS:
+        topology = D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP;
+        break;
+
+    case POINTSLIST:
+        topology = D3D_PRIMITIVE_TOPOLOGY_POINTLIST;
+        break;
+
+    case LINELIST:
+        topology = D3D_PRIMITIVE_TOPOLOGY_LINELIST;
+        break;
+
+    case LINESTRIPS:
+        topology = D3D_PRIMITIVE_TOPOLOGY_LINESTRIP;
+        break;
+
+    default:
+        topology = D3D_PRIMITIVE_TOPOLOGY_UNDEFINED;
+        break;
+    }
+
+    return topology;
+}
+
+D3D12_PRIMITIVE_TOPOLOGY_TYPE ToD3D12TopologyType(PrimitiveType type)
+{
+    D3D12_PRIMITIVE_TOPOLOGY_TYPE topologyType =
+        D3D12_PRIMITIVE_TOPOLOGY_TYPE_UNDEFINED;
+
+    switch (type)
+    {
+    case TRIANGLES:
+    case TRISTRIPS:
+    case TRIFAN:
+        topologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+        break;
+
+    case LINELIST:
+    case LINESTRIPS:
+        topologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE;
+        break;
+
+    case POINTSLIST:
+        topologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_POINT;
+        break;
+
+    default:
+        topologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_UNDEFINED;
+        break;
+    }
+
+    return topologyType;
+}
+
+D3D12_CULL_MODE ToD3D12CullMode(CullMode mode)
+{
+    D3D12_CULL_MODE cullMode = D3D12_CULL_MODE_NONE;
+
+    switch (mode)
+    {
+    case CullMode::CULL_NONE:
+        cullMode = D3D12_CULL_MODE_NONE;
+        break;
+
+    case CullMode::CULL_BACK:
+        cullMode = D3D12_CULL_MODE_BACK;
+        break;
+
+    case CullMode::CULL_FRONT:
+        cullMode = D3D12_CULL_MODE_FRONT;
+        break;
+
+    default:
+        cullMode = D3D12_CULL_MODE_NONE;
+        break;
+    }
+
+    return cullMode;
+}
+
+DXGI_FORMAT ToDXGIFormat(ImageFormat format)
+{
+    DXGI_FORMAT dxgiFormat = DXGI_FORMAT_UNKNOWN;
+
+    switch (format)
+    {
+    case X8L8U8V8:
+        // No direct DXGI equivalent
+        dxgiFormat = DXGI_FORMAT_UNKNOWN;
+        break;
+
+    case DXT1:
+        dxgiFormat = DXGI_FORMAT_BC1_UNORM;
+        break;
+
+    case DXT3:
+        dxgiFormat = DXGI_FORMAT_BC2_UNORM;
+        break;
+
+    case R8G8B8A8:
+        dxgiFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
+        break;
+
+    case B8G8R8A8:
+        dxgiFormat = DXGI_FORMAT_B8G8R8A8_UNORM;
+        break;
+
+    case D24UNORMS8STENCIL:
+        dxgiFormat = DXGI_FORMAT_D24_UNORM_S8_UINT;
+        break;
+
+    case D32FLOATS8STENCIL:
+        dxgiFormat = DXGI_FORMAT_D32_FLOAT_S8X24_UINT;
+        break;
+
+    case D32FLOAT:
+        dxgiFormat = DXGI_FORMAT_D32_FLOAT;
+        break;
+
+    case R8G8B8A8_UNORM:
+        dxgiFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
+        break;
+
+    case R8G8B8:
+        // No 24-bit RGB format in DXGI
+        dxgiFormat = DXGI_FORMAT_UNKNOWN;
+        break;
+
+    case B8G8R8A8_UNORM:
+        dxgiFormat = DXGI_FORMAT_B8G8R8A8_UNORM;
+        break;
+
+    case IMAGE_UNKNOWN:
+    default:
+        dxgiFormat = DXGI_FORMAT_UNKNOWN;
+        break;
+    }
+
+    return dxgiFormat;
+}
+
+D3D12_COMPARISON_FUNC ConvertRasterizerTestToD3D12CompareFunc(RasterizerTest testApp)
+{
+    D3D12_COMPARISON_FUNC ret = D3D12_COMPARISON_FUNC_ALWAYS;
+
+    switch (testApp)
+    {
+    case RasterizerTest::NEVER:
+        ret = D3D12_COMPARISON_FUNC_NEVER;
+        break;
+
+    case RasterizerTest::LESS:
+        ret = D3D12_COMPARISON_FUNC_LESS;
+        break;
+
+    case RasterizerTest::EQUAL:
+        ret = D3D12_COMPARISON_FUNC_EQUAL;
+        break;
+
+    case RasterizerTest::LESSEQUAL:
+        ret = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+        break;
+
+    case RasterizerTest::GREATER:
+        ret = D3D12_COMPARISON_FUNC_GREATER;
+        break;
+
+    case RasterizerTest::NOTEQUAL:
+        ret = D3D12_COMPARISON_FUNC_NOT_EQUAL;
+        break;
+
+    case RasterizerTest::GREATEREQUAL:
+        ret = D3D12_COMPARISON_FUNC_GREATER_EQUAL;
+        break;
+
+    case RasterizerTest::ALLPASS:
+        ret = D3D12_COMPARISON_FUNC_ALWAYS;
+        break;
+
+    default:
+        break;
+    }
+
+    return ret;
+}
+
+D3D12_STENCIL_OP ToD3D12StencilOp(StencilOp op)
+{
+    D3D12_STENCIL_OP result = D3D12_STENCIL_OP_KEEP;
+
+    switch (op)
+    {
+    case StencilOp::REPLACE:
+        result = D3D12_STENCIL_OP_REPLACE;
+        break;
+
+    case StencilOp::KEEP:
+        result = D3D12_STENCIL_OP_KEEP;
+        break;
+
+    case StencilOp::ZERO:
+        result = D3D12_STENCIL_OP_ZERO;
+        break;
+
+    default:
+        result = D3D12_STENCIL_OP_KEEP;
+        break;
+    }
+
+    return result;
+}
+
+D3D12_DEPTH_STENCILOP_DESC ToD3D12StencilDesc(const FaceStencilData& data)
+{
+    D3D12_DEPTH_STENCILOP_DESC desc = {};
+
+    desc.StencilFailOp = ToD3D12StencilOp(data.failOp);
+    desc.StencilPassOp = ToD3D12StencilOp(data.passOp);
+    desc.StencilDepthFailOp = ToD3D12StencilOp(data.depthFailOp);
+
+    desc.StencilFunc = ConvertRasterizerTestToD3D12CompareFunc(data.stencilCompare);
+
+    return desc;
+}
+
+ID3D12PipelineState* CreatePipelineStateObject(ID3D12Device2* device, ID3D12RootSignature* _rootSignature, ShaderHandles* handles, int count, GenericPipelineStateInfo* stateInfo)
 {
     ID3D12PipelineState* pipelineState;
 
@@ -970,7 +1236,6 @@ ID3D12PipelineState* CreatePipelineStateObject(ID3D12Device2* device, ID3D12Root
 
     D3D12_GRAPHICS_PIPELINE_STATE_DESC desc{};
     desc.pRootSignature = _rootSignature;
-
 
     for (int i = 0; i < count; i++)
     {
@@ -992,43 +1257,75 @@ ID3D12PipelineState* CreatePipelineStateObject(ID3D12Device2* device, ID3D12Root
         }
     }
 
-    D3D12_INPUT_ELEMENT_DESC inputLayout[2]{};
+    int inputCount = stateInfo->vertexBufferDescCount;
 
-    VertexInputDescription inputDesc[2] = {
-        {
-            ComponentFormatType::R32G32B32A32_SFLOAT,
-            0, 
-            VertexUsage::POSITION
-        },
-        {
-            ComponentFormatType::R32G32B32A32_SFLOAT,
-            sizeof(XMVECTOR),
-            VertexUsage::TEX0
-        }
-    };
+    UINT totalAttributeCount = 0;
 
-    for (int i = 0; i < 2; i++)
+    for (int i = 0; i < inputCount; i++)
     {
-        ConvertVertexLayoutToD3D12InputDesc(&inputDesc[i], &inputLayout[i], 0);
+        VertexBufferDescription* buffers = &stateInfo->vertexBufferDesc[i];
+
+        int attributeCount = buffers->descCount;
+
+        totalAttributeCount += attributeCount;
     }
 
-    desc.InputLayout = { inputLayout, 2 };
-    desc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
-    desc.SampleMask = UINT_MAX;
-    desc.DepthStencilState = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
-    desc.DepthStencilState.DepthEnable = TRUE;
-    desc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
-    desc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
-    desc.DepthStencilState.StencilEnable = FALSE;
-    desc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
+    D3D12_INPUT_ELEMENT_DESC* attributeDesc = (D3D12_INPUT_ELEMENT_DESC*)AllocFromTemp(sizeof(D3D12_INPUT_ELEMENT_DESC) * totalAttributeCount, 4);
+
+    int attributeCounter = 0;
+
+    for (UINT i = 0; i < inputCount; i++)
+    {
+
+        VertexBufferDescription* buffers = &stateInfo->vertexBufferDesc[i];
+
+        int attributeCount = buffers->descCount;
+
+        for (UINT j = 0; j < attributeCount; j++)
+        {
+            ConvertVertexLayoutToD3D12InputDesc(&buffers->descriptions[j], &attributeDesc[attributeCounter+j], ConvertVertexRateToD3D12InputClass(buffers->rate), 0, i);
+        }
+
+        attributeCounter += attributeCount;
+    }
+
+    desc.InputLayout = { attributeDesc, totalAttributeCount };
+
+    desc.PrimitiveTopologyType = ToD3D12TopologyType(stateInfo->primType);
+
     desc.NumRenderTargets = 1;
-    desc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
-    desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    desc.RTVFormats[0] = ToDXGIFormat(stateInfo->colorFormat);
+
+    desc.DSVFormat = ToDXGIFormat(stateInfo->depthFormat);
+
     desc.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
+    desc.RasterizerState.CullMode = ToD3D12CullMode(stateInfo->cullMode);
+    desc.RasterizerState.FrontCounterClockwise = (stateInfo->windingOrder == TriangleWinding::CCW ? TRUE : FALSE);
+
+    desc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
+
+    desc.DepthStencilState = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
+    desc.DepthStencilState.DepthEnable = stateInfo->depthEnable;
+    desc.DepthStencilState.DepthWriteMask = (stateInfo->depthWrite ? D3D12_DEPTH_WRITE_MASK_ALL : D3D12_DEPTH_WRITE_MASK_ZERO);
+    desc.DepthStencilState.DepthFunc = ConvertRasterizerTestToD3D12CompareFunc(stateInfo->depthTest);
+    desc.DepthStencilState.StencilEnable = stateInfo->StencilEnable;
+  
+    desc.DepthStencilState.BackFace = ToD3D12StencilDesc(stateInfo->backFace);
+    desc.DepthStencilState.FrontFace = ToD3D12StencilDesc(stateInfo->frontFace);
+
+
+    if (stateInfo->frontFace.compareMask != stateInfo->backFace.compareMask || stateInfo->frontFace.writeMask != stateInfo->backFace.writeMask)
+    {
+        //handle unaligned 
+    }
+
+    desc.DepthStencilState.StencilReadMask = stateInfo->frontFace.compareMask;
+    desc.DepthStencilState.StencilWriteMask = stateInfo->frontFace.writeMask;
+
+
+    desc.SampleMask = UINT_MAX;
     desc.SampleDesc.Count = 1;
     desc.SampleDesc.Quality = 0;
-    desc.RasterizerState.CullMode = D3D12_CULL_MODE_FRONT;
-    desc.RasterizerState.FrontCounterClockwise = FALSE;
 
     hr = device->CreateGraphicsPipelineState(
         &desc,
@@ -3013,7 +3310,7 @@ void CreateDSVRSVMemoryPool(TextureMemoryPool* pool, size_t sizeOfPool, size_t a
     pool->alignment = alignment;
 }
 
-ShaderGraph* ShaderGraphReader::CreateShaderGraph(
+ShaderGraph* CreateShaderGraph(
     const std::string& filename
 )
 {
@@ -3050,7 +3347,7 @@ ShaderGraph* ShaderGraphReader::CreateShaderGraph(
     int tagCount = 0;
     int curr = 0;
 
-    int stride = SkipLine(data, curr);
+    int stride = SkipLine(data, shaderGraphSize, curr);
     curr += stride;
 
     while (curr + stride < shaderGraphSize)
@@ -3058,17 +3355,15 @@ ShaderGraph* ShaderGraphReader::CreateShaderGraph(
 
         unsigned long hashl = 0;
         bool opening = true;
-        stride = ProcessTag(data, curr, &hashl, &opening);
+        stride = ProcessTag(data,  shaderGraphSize, curr, &hashl, &opening);
         curr += stride;
 
-        stride = SkipLine(data, curr);
+        stride = SkipLine(data, shaderGraphSize, curr);
 
         if (opening)
         {
             tagCount++;
         }
-
-
 
         switch (hashl)
         {
@@ -3082,7 +3377,7 @@ ShaderGraph* ShaderGraphReader::CreateShaderGraph(
             //std::cout << "GLSLShader" << std::endl;
             if (opening) {
                 curr += stride;
-                stride = SkipLine(data, curr);
+                stride = SkipLine(data, shaderGraphSize, curr);
                 shaderCount++;
             }
             break;
@@ -3097,14 +3392,14 @@ ShaderGraph* ShaderGraphReader::CreateShaderGraph(
         case hash("ShaderResourceItem"):
             //std::cout << "ShaderResourceItem" << std::endl;
             if (opening) {
-                stride = HandleShaderResourceItem(data, curr, &TreeNodes[tagCount]);
+                stride = HandleShaderResourceItem(data,  shaderGraphSize, curr, &TreeNodes[tagCount]);
                 shaderResourceCount++;
             }
             break;
         case hash("ComputeLayout"):
             //std::cout << "ComputeLayout" << std::endl;
             if (opening) {
-                stride = HandleComputeLayout(data, curr, &TreeNodes[tagCount]);
+                stride = HandleComputeLayout(data,  shaderGraphSize, curr, &TreeNodes[tagCount]);
             }
 
             break;
@@ -3200,4 +3495,133 @@ ShaderGraph* ShaderGraphReader::CreateShaderGraph(
     readerMemBufferAllocate = 0;
 
     return graph;
+}
+
+
+void CreatePipelineDescription(const std::string& filename, GenericPipelineStateInfo* stateInfo)
+{
+    memset(stateInfo, 0, sizeof(GenericPipelineStateInfo));
+
+
+    OSFileHandle fileHandle;
+
+    auto ret = OSOpenFile(filename.c_str(), READ, &fileHandle);
+
+    if (ret)
+    {
+        throw std::runtime_error("Shader Init file is unable to be opened");
+    }
+
+    char* data = (char*)AllocFromTemp(fileHandle.fileLength, 64);
+
+    OSReadFile(&fileHandle, fileHandle.fileLength, data);
+
+    char* dataStart = data;
+    int dataSize = fileHandle.fileLength;
+
+    int tagCount = 0;
+    int curr = 0;
+
+    int stride = SkipLine(dataStart, dataSize, curr);
+    curr += stride;
+
+    int currentVertexInput = 0;
+    int currentVertexInputDescription = 0;
+
+    OSCloseFile(&fileHandle);
+
+    while (curr + stride < dataSize)
+    {
+
+        unsigned long hashl = 0;
+        bool opening = true;
+        stride = ProcessTag(dataStart, dataSize, curr, &hashl, &opening);
+        curr += stride;
+
+        stride = SkipLine(dataStart, dataSize, curr);
+
+        if (opening)
+        {
+            tagCount++;
+        }
+
+
+
+        switch (hashl)
+        {
+        case hash("PipelineDescription"):
+            if (opening)
+            {
+                stride = HandlePipelineDescription(dataStart, dataSize, curr, stateInfo);
+            }
+            break;
+        case hash("DepthTest"):
+            if (opening)
+            {
+                stride = HandleDepthTest(dataStart, dataSize, curr, stateInfo);
+            }
+            break;
+        case hash("PrimitiveType"):
+            if (opening)
+            {
+                stride = HandlePrimitiveType(dataStart, dataSize, curr, stateInfo);
+            }
+            break;
+
+        case hash("CullMode"):
+            if (opening)
+            {
+                stride = HandleCullMode(dataStart, dataSize, curr, stateInfo);
+            }
+            break;
+        case hash("VertexInput"):
+        {
+            if (opening)
+            {
+                stateInfo->vertexBufferDescCount++;
+                stride = HandleVertexInput(dataStart, dataSize, curr, stateInfo, currentVertexInput);
+            }
+            else
+            {
+                currentVertexInput++;
+            }
+            break;
+        }
+        case hash("VertexComponent"):
+        {
+            if (opening)
+            {
+                stateInfo->vertexBufferDesc[currentVertexInput].descCount++;
+                stride = HandleVertexComponentInput(dataStart, dataSize, curr, stateInfo, currentVertexInput, currentVertexInputDescription);
+            }
+            else
+            {
+                currentVertexInputDescription++;
+            }
+            break;
+        }
+        case hash("FrontStencilTest"):
+        {
+            if (opening)
+            {
+                stateInfo->StencilEnable = true;
+                stride = HandleStencilTest(dataStart, dataSize, curr, &stateInfo->frontFace);
+            }
+            break;
+        }
+        case hash("BackStencilTest"):
+        {
+            if (opening)
+            {
+                stateInfo->StencilEnable = true;
+                stride = HandleStencilTest(dataStart, dataSize, curr, &stateInfo->backFace);
+            }
+            break;
+        }
+        }
+
+        curr += stride;
+
+
+    }
 }

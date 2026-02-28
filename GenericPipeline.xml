@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<PipelineDescription sampLo="1" sampHi="16">
+	<VertexInput rate="vertex" size="32">
+		<VertexComponent usage="POS0" format="vec4" offset="0">
+		</VertexComponent>
+		<VertexComponent usage="TEX0" format="vec4" offset="16">
+		</VertexComponent>
+	</VertexInput>
+	<PrimitiveType type="trilists">
+	</PrimitiveType>
+	<CullMode mode="none" winding="ccw">
+	</CullMode>
+	<DepthTest op="less" write="true">
+	</DepthTest>
+	<FrontStencilTest failop="keep" passop="replace" depthfailop="keep" compareop="always" writemask="255" comparemask="255" ref="1">
+	</FrontStencilTest>
+	<BackStencilTest failop="keep" passop="replace" depthfailop="keep" compareop="always" writemask="255" comparemask="255" ref="1">
+	</BackStencilTest>
+</PipelineDescription>
