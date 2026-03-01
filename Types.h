@@ -124,6 +124,33 @@ struct ShaderGraph
     int GetGraphSize() const;
 };
 
+struct ShaderDetails
+{
+    int shaderNameSize;
+    int shaderDataSize;
+
+    ShaderDetails* GetNext();
+
+    char* GetString();
+
+    void* GetShaderData();
+};
+
+ShaderDetails* ShaderDetails::GetNext()
+{
+    return (ShaderDetails*)((uintptr_t)this + sizeof(ShaderDetails) + shaderDataSize + shaderNameSize);
+}
+
+char* ShaderDetails::GetString()
+{
+    return (char*)((uintptr_t)this + sizeof(ShaderDetails));
+}
+
+void* ShaderDetails::GetShaderData()
+{
+    return (void*)((uintptr_t)this + sizeof(ShaderDetails) + shaderNameSize);
+}
+
 struct ShaderComputeLayout
 {
     unsigned long x;
@@ -136,7 +163,7 @@ struct ShaderXMLTag
 {
     unsigned long hashCode;
 };
-struct ShaderGLSLShaderXMLTag : ShaderXMLTag //followed by shaderNameLen Bytes
+struct ShaderDetailsXMLTag : ShaderXMLTag //followed by shaderNameLen Bytes
 {
     ShaderStageType type;
 };
@@ -162,7 +189,12 @@ hash(char* str);
 
 static constexpr unsigned long
 hash(const std::string& string);
-static ShaderGraph* CreateShaderGraph(const std::string& filename);
+static ShaderGraph* CreateShaderGraph(
+    const std::string& filename,
+    char* detailsData,
+    ShaderDetails** details
+);
+
 static int ProcessTag(char* fileData, int size, int currentLocation, unsigned long* hash, bool* opening);
 
 static int SkipLine(char* fileData, int size, int currentLocation);
@@ -176,7 +208,7 @@ static int ReadAttributeValueVal(char* fileData, int size, int currentLocation, 
 
 static int ReadAttributes(char* fileData, int size, int currentLocation, unsigned long* hashes, int* stackSize);
 
-static int HandleGLSLShader(char* fileData, int size, int currentLocation, uintptr_t* offset, void* shaderData, int* shaderDataSize);
+static int HandleShader(char* fileData, int size, int currentLocation, uintptr_t* offset, void* shaderData, int* shaderDataSize);
 
 static int HandleShaderResourceItem(char* fileData, int size, int currentLocation, uintptr_t* offset);
 
@@ -250,32 +282,7 @@ int ShaderMap::GetMapSize() const
 }
 #include <stdexcept>
 
-struct ShaderDetails
-{
-    int shaderNameSize;
-    int shaderDataSize;
 
-    ShaderDetails* GetNext();
-
-    char* GetString();
-
-    void* GetShaderData();
-};
-
-ShaderDetails* ShaderDetails::GetNext()
-{
-    return (ShaderDetails*)((uintptr_t)this + sizeof(ShaderDetails) + shaderDataSize + shaderNameSize);
-}
-
-char* ShaderDetails::GetString()
-{
-    return (char*)((uintptr_t)this + sizeof(ShaderDetails));
-}
-
-void* ShaderDetails::GetShaderData()
-{
-    return (void*)((uintptr_t)this + sizeof(ShaderDetails) + shaderNameSize);
-}
 
 constexpr unsigned long
 hash(char* str)
@@ -576,7 +583,7 @@ int ReadAttributes(char* fileData, int size, int currentLocation, unsigned long*
 
 
 
-int HandleGLSLShader(char* fileData, int size, int currentLocation, uintptr_t* offset, void* shaderData, int* shaderDataSize)
+int HandleShader(char* fileData, int size, int currentLocation, uintptr_t* offset, void* shaderData, int* shaderDataSize)
 {
     unsigned long hashes[6];
 
@@ -593,11 +600,11 @@ int HandleGLSLShader(char* fileData, int size, int currentLocation, uintptr_t* o
 
     detailHead += sizeof(ShaderDetails);
 
-    ShaderGLSLShaderXMLTag* tag = (ShaderGLSLShaderXMLTag*)&readerMemBuffer[readerMemBufferAllocate];
+    ShaderDetailsXMLTag* tag = (ShaderDetailsXMLTag*)&readerMemBuffer[readerMemBufferAllocate];
 
     *offset = (uintptr_t)tag;
 
-    tag->hashCode = hash("GLSLShader");
+    tag->hashCode = hash("HLSLShader");
 
     int stackIter = 0;
 
@@ -627,14 +634,14 @@ int HandleGLSLShader(char* fileData, int size, int currentLocation, uintptr_t* o
         }
 
         default:
-            throw std::runtime_error("Failed GLSL Type of Shader");
+            throw std::runtime_error("Failed Type of Shader");
             break;
         }
 
         stackIter += 2;
     }
 
-    readerMemBufferAllocate += sizeof(ShaderGLSLShaderXMLTag);
+    readerMemBufferAllocate += sizeof(ShaderDetailsXMLTag);
 
     ret += ReadValue(fileData, size, currentLocation + ret, details->GetString(), &details->shaderNameSize);
 
