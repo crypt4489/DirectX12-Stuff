@@ -146,10 +146,12 @@ XCOPY "$(SolutionDir)VS.bin" "$(OutDir)" /K /Y</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="APIConversionFunctions.cpp" />
     <ClCompile Include="DX12Device.cpp" />
     <ClCompile Include="main.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="APIConversionFunctions.h" />
     <ClInclude Include="d3dx12.h" />
     <ClInclude Include="DX12Device.h" />
     <ClInclude Include="Files.h" />

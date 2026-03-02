@@ -1,14 +1,11 @@
 #define WIN32_LEAN_AND_MEAN
 
 #include <Windows.h>
-#include <string>
-#include <array>
+
 #include "Types.h"
 #include "Files.h"
 #include "DX12Device.h"
-
 using namespace DirectX;
-
 
 HINSTANCE hInst;
 HWND hwnd;
@@ -17,8 +14,6 @@ bool shouldClose = false;
 LRESULT CALLBACK winproc(HWND hwnd, UINT wm, WPARAM wp, LPARAM lp);
 int CreateDX12Window(int requestedDimensionX, int requestDimensionY);
 int PollDX12WindowEvents();
-
-
 
 constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 3;
 bool g_UseWarp = false;
@@ -40,40 +35,6 @@ static size_t storageGlobalAllocatorSize = STORAGE_MEM_SIZE;
 
 
 
-
-
-
-
-
-void* AllocFromTemp(size_t size, size_t alignment)
-{
-    size_t current = tempGlobalAllocator;
-
-    if (current + size >= TEMP_MEM_SIZE)
-        current = 0;
-
-    current = (current + alignment - 1) & ~(alignment - 1);
-
-    tempGlobalAllocator += (size)+(current - tempGlobalAllocator);
-
-    return (void*)&tempGlobalMemoryPool[current];
-}
-
-void* AllocFromPermanent(size_t size, size_t alignment)
-{
-    size_t current = storageGlobalAllocator;
-
-    if (current + size >= STORAGE_MEM_SIZE)
-        current = 0;
-
-    current = (current + alignment - 1) & ~(alignment - 1);
-
-    storageGlobalAllocator += (size)+(current - storageGlobalAllocator);
-
-    return (void*)&globalMemoryPool[current];
-}
-
-
 DXGI_FORMAT ConvertImageFormatToDXGIFormat(ImageFormat format);
 D3D12_CULL_MODE ConvertCullModeToD3D12CullMode(CullMode mode);
 D3D12_DEPTH_STENCILOP_DESC ConvertFaceStencilDataToD3D12StencilDesc(const FaceStencilData& data);
@@ -83,13 +44,14 @@ const char* ConvertVertexUsageToSemanticName(VertexUsage usage, UINT* sematicInd
 DXGI_FORMAT ConvertComponentFormatToDXGIFormat(ComponentFormatType format);
 D3D12_INPUT_CLASSIFICATION ConvertVertexRateToD3D12InputClass(VertexBufferRate rate);
 void ConvertVertexLayoutToD3D12InputDesc(
-    VertexInputDescription* inputVertexDesc, 
-    D3D12_INPUT_ELEMENT_DESC* desc, 
-    D3D12_INPUT_CLASSIFICATION inputRate, 
+    VertexInputDescription* inputVertexDesc,
+    D3D12_INPUT_ELEMENT_DESC* desc,
+    D3D12_INPUT_CLASSIFICATION inputRate,
     UINT instanceUseRate, UINT vertexbufferid
 );
 D3D12_PRIMITIVE_TOPOLOGY_TYPE ConvertPrimitiveTypeToD3D12TopologyType(PrimitiveType type);
 D3D12_PRIMITIVE_TOPOLOGY ConvertPrimitiveTypeToD3D12Topology(PrimitiveType type);
+
 
 const char* ConvertVertexUsageToSemanticName(VertexUsage usage, UINT* sematicIndex)
 {
@@ -439,6 +401,41 @@ D3D12_PRIMITIVE_TOPOLOGY_TYPE ConvertPrimitiveTypeToD3D12TopologyType(PrimitiveT
     return topologyType;
 }
 
+
+
+
+void* AllocFromTemp(size_t size, size_t alignment)
+{
+    size_t current = tempGlobalAllocator;
+
+    if (current + size >= TEMP_MEM_SIZE)
+        current = 0;
+
+    current = (current + alignment - 1) & ~(alignment - 1);
+
+    tempGlobalAllocator += (size)+(current - tempGlobalAllocator);
+
+    return (void*)&tempGlobalMemoryPool[current];
+}
+
+void* AllocFromPermanent(size_t size, size_t alignment)
+{
+    size_t current = storageGlobalAllocator;
+
+    if (current + size >= STORAGE_MEM_SIZE)
+        current = 0;
+
+    current = (current + alignment - 1) & ~(alignment - 1);
+
+    storageGlobalAllocator += (size)+(current - storageGlobalAllocator);
+
+    return (void*)&globalMemoryPool[current];
+}
+
+
+
+
+
 DX12Device deviceInstance;
 
 EntryHandle queueHandle;
@@ -474,17 +471,7 @@ bool g_VSync = true;
 
 bool g_TearingSupported = false;
 
-enum D3D12ShaderType
-{
-    VERTEX = 0,
-    PIXEL = 1
-};
 
-struct ShaderHandles
-{
-    D3D12ShaderType type;
-    EntryHandle shader;
-};
 
 ShaderHandles shaderHandles[2]{};
 
@@ -506,27 +493,15 @@ EntryHandle rsvdsvPool;
 
 void ParseBMP(TextureDetails* details, const char* name);
 
-
-
-
 int Render();
 
 void ReleaseD3D12Resources();
 
 void WriteToHostMemory(int allocationIndex, void* data, size_t size, size_t offset, int copies);
 void WriteToDeviceLocalMemory(int allocationIndex, void* data, size_t size, size_t offset, int copies);
-
-ID3D12Resource* CreateCommittedImageResource(ID3D12Device2* device, UINT width, UINT height, UINT depth, UINT mips, D3D12_RESOURCE_FLAGS flags, DXGI_FORMAT format, D3D12_RESOURCE_DIMENSION dimension);
-
-ID3D12Resource* CreatePlacedImageResource(ID3D12Device2* device, ImageMemoryPool* pool, UINT width, UINT height, UINT depth, UINT mips, D3D12_RESOURCE_FLAGS flags, DXGI_FORMAT format, D3D12_RESOURCE_DIMENSION dimension);
-
-EntryHandle CreatePlacedImageResource(ImageMemoryPool* pool, UINT width, UINT height, UINT depth, UINT mips, D3D12_RESOURCE_FLAGS flags, DXGI_FORMAT format, D3D12_RESOURCE_DIMENSION dimension);
-
-void ExecuteCommandListsOnQueue(EntryHandle queueIndex, ID3D12CommandList** lists, UINT numOfLists);
+void WriteToImageDeviceLocalMemory(EntryHandle imageHandle, char* data, UINT width, UINT height, UINT componentCount, UINT totalImageSize, DXGI_FORMAT format, UINT mipLevels, UINT layers);
 
 
-void WriteToImageDeviceLocalMemory(ID3D12Resource* imageHandle, char* data, UINT width, UINT height, UINT componentCount, UINT totalImageSize, DXGI_FORMAT format, UINT mipLevels, UINT layers);
-void TransitionBufferBarrier(ID3D12GraphicsCommandList7* cmdBuffer, ID3D12Resource* resource, D3D12_BARRIER_SYNC srcSync, D3D12_BARRIER_ACCESS srcAccess, D3D12_BARRIER_SYNC dstSync, D3D12_BARRIER_ACCESS dstAccess);
 EntryHandle CreateRootSignatureFromShaderGraph(ShaderGraph* graph);
 struct Camera
 {
@@ -539,61 +514,11 @@ XMMATRIX world[2];
 Camera cam;
 
 
-struct PipelineObject
-{
-    EntryHandle rootSignature;
-    EntryHandle pipelineState;
-    int heapsCount;
-    ID3D12DescriptorHeap* descriptorHeap[8];
-    int descriptorTableCount;
-    int descriptorHeapPointer[8];
-    int resourceCount[8];
-    int descriptorHeapSelection[8]; //number of descriptor tables
-    D3D_PRIMITIVE_TOPOLOGY topology;//D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST
-    int instanceCount;
-    
-    EntryHandle vertexBuffer = ~0ui64;
-    UINT vertexBufferOffset;
-    UINT vertexBufferSize;
-    int vertexSize;
-    int vertexCount;
-    EntryHandle indexBuffer = ~0ui64;
-    UINT indexBufferOffset;
-    UINT indexBufferSize;
-    int indexSize;
-    int indexCount;
-
-};
-
+EntryHandle CreatePipelineStateObject(EntryHandle _rootSignature, ShaderHandles* handles, int count, GenericPipelineStateInfo* stateInfo);
+ID3D12PipelineState* CreatePipelineStateObject(ID3D12Device2* device, ID3D12RootSignature* _rootSignature, ShaderHandles* handles, int count, GenericPipelineStateInfo* stateInfo);
 
 PipelineObject triangles[2];
 
-ID3D12PipelineState* CreatePipelineStateObject(ID3D12Device2* device, ID3D12RootSignature* _rootSignature, ShaderHandles* handles, int count, GenericPipelineStateInfo* stateInfo);
-
-EntryHandle CreatePipelineStateObject(EntryHandle _rootSignature, ShaderHandles* handles, int count, GenericPipelineStateInfo* stateInfo);
-
-
-EntryHandle CreateRootSignature(CD3DX12_ROOT_PARAMETER* rootParameters, UINT parameterCount, D3D12_ROOT_SIGNATURE_FLAGS flags);
-ID3D12RootSignature* CreateRootSignature(ID3D12Device2* device, CD3DX12_ROOT_PARAMETER* rootParameters, UINT parameterCount, D3D12_ROOT_SIGNATURE_FLAGS flags);
-
-
-
-
-
-
-
-
-size_t AllocFromDriverMemoryBuffer(DriverMemoryBuffer* dmb, size_t allocSize, size_t alignment)
-{
-    size_t current = dmb->currentPointer;
-    size_t start = current;
-
-    current = (current + alignment - 1) & ~(alignment - 1);
-
-    dmb->currentPointer += (allocSize + (current - start));
-
-    return current;
-}
 
 EntryHandle hostBuffer{};
 EntryHandle deviceLocalBuffer{};
@@ -601,17 +526,9 @@ EntryHandle stagingBuffers[MAX_FRAMES_IN_FLIGHT]{};
 
 
 
-struct DescriptorHeap
-{
-    D3D12_DESCRIPTOR_HEAP_TYPE type;
-    EntryHandle descriptorHeap;
-    int descriptorHeapHandlePointer;
-    int maxDescriptorHeapHandles;
-    UINT descriptorHeapHandleSize;
-};
 
-DescriptorHeap mainSRVDescriptorHeap;
-DescriptorHeap mainSamplerDescriptorHeap;
+EntryHandle mainSRVDescriptorHeap;
+EntryHandle mainSamplerDescriptorHeap;
 
 
 struct ImageHandle
@@ -667,13 +584,8 @@ struct DescriptorTypeImageSRV : public DescriptorTypeHeader
     EntryHandle image;
 };
 
-void CreateDescriptorHeapManager(DescriptorHeap* heap, UINT maxDescriptorHandles, D3D12_DESCRIPTOR_HEAP_TYPE type, D3D12_DESCRIPTOR_HEAP_FLAGS flags);
-int CreateDescriptorTable(uintptr_t header, int descriptorCount, int frameCount, DescriptorHeap* heap);
-void CreateSRVDescriptorHandle(ID3D12Device2* device, ID3D12Resource* bufferHandle, UINT offset, UINT numCount, UINT size, DXGI_FORMAT format, DescriptorHeap* heap, D3D12_SRV_DIMENSION dimension);
-void CreateImageSRVDescriptorHandle(ID3D12Device2* device, ID3D12Resource* bufferHandle, UINT mipsLevels, DXGI_FORMAT format, DescriptorHeap* heap, D3D12_SRV_DIMENSION dimension);
-void CreateUAVDescriptorHandle(ID3D12Device2* device, ID3D12Resource* bufferHandle, UINT offset, UINT numCount, UINT size, DXGI_FORMAT format, DescriptorHeap* heap);
-void CreateCBVDescriptorHandle(ID3D12Device2* device, ID3D12Resource* bufferHandle, UINT offset, UINT size, DescriptorHeap* heap);
-void CreateImageSampler(ID3D12Device2* device, DescriptorHeap* samplerDescriptorHeap);
+int CreateDescriptorTable(uintptr_t header, int descriptorCount, int frameCount, EntryHandle heap);
+
 void CreateTablesFromResourceSet(int* descriptorSets, int numDescriptorSet, PipelineObject* object);
 
 static uint16_t BoxIndices[36] = {
@@ -731,13 +643,11 @@ int AllocFromHostBuffer(size_t size, size_t alignment, int copies)
 
     allocSize *= copies;
 
-    DriverMemoryBuffer* buffer = (DriverMemoryBuffer*)deviceInstance.GetAndValidateItem(hostBuffer, D12BUFFERMEMORYPOOL);
-
-    size_t location = AllocFromDriverMemoryBuffer(buffer, allocSize, alignment);
+    size_t location = deviceInstance.AllocFromDriverMemoryBuffer(hostBuffer, allocSize, alignment);
 
     int index = allocationHandleIndex++;
 
-    allocationHandle[index].bufferHandle = buffer->bufferHandle;
+    allocationHandle[index].bufferHandle = hostBuffer;
     allocationHandle[index].offset = location;
     allocationHandle[index].totalDeviceAlloc = allocSize;
     allocationHandle[index].requestedsize = size;
@@ -755,13 +665,11 @@ int AllocFromDeviceBuffer(size_t size, size_t alignment, int copies)
 
     allocSize *= copies;
 
-    DriverMemoryBuffer* buffer = (DriverMemoryBuffer*)deviceInstance.GetAndValidateItem(deviceLocalBuffer, D12BUFFERMEMORYPOOL);
-
-    size_t location = AllocFromDriverMemoryBuffer(buffer, allocSize, alignment);
+    size_t location = deviceInstance.AllocFromDriverMemoryBuffer(deviceLocalBuffer, allocSize, alignment);
 
     int index = allocationHandleIndex++;
 
-    allocationHandle[index].bufferHandle = buffer->bufferHandle;
+    allocationHandle[index].bufferHandle = deviceLocalBuffer;
     allocationHandle[index].offset = location;
     allocationHandle[index].totalDeviceAlloc = allocSize;
     allocationHandle[index].requestedsize = size;
@@ -830,7 +738,6 @@ void DoSceneStuff()
 
     triangles[0].pipelineState = CreatePipelineStateObject(triangles[0].rootSignature, shaderHandles, 2, &pipeInfo);
 
-
     TextureDetails details{};
 
     ParseBMP(&details, "face1.bmp");
@@ -841,13 +748,10 @@ void DoSceneStuff()
     int vertexOffset = AllocFromDeviceBuffer(sizeof(BoxVerts), 16, 1);
     int indexOffset = AllocFromDeviceBuffer(sizeof(BoxIndices), 16, 1);
 
-    ID3D12GraphicsCommandList7* transCmdBuffer = (ID3D12GraphicsCommandList7*)deviceInstance.GetAndValidateItem(transferCommandBuffer, D12COMMANDBUFFER7);
-
+    
     DriverMemoryBuffer* buffer = (DriverMemoryBuffer*)deviceInstance.GetAndValidateItem(deviceLocalBuffer, D12BUFFERMEMORYPOOL);
 
-    ID3D12Resource* deviceLocalHandle = (ID3D12Resource*)deviceInstance.GetAndValidateItem(buffer->bufferHandle, D12RESOURCEHANDLE);
-
-    TransitionBufferBarrier(transCmdBuffer, deviceLocalHandle, D3D12_BARRIER_SYNC_NONE, D3D12_BARRIER_ACCESS_NO_ACCESS, D3D12_BARRIER_SYNC_COPY, D3D12_BARRIER_ACCESS_COPY_DEST);
+    deviceInstance.TransitionBufferBarrier(transferCommandBuffer, buffer->bufferHandle, D3D12_BARRIER_SYNC_NONE, D3D12_BARRIER_ACCESS_NO_ACCESS, D3D12_BARRIER_SYNC_COPY, D3D12_BARRIER_ACCESS_COPY_DEST);
 
     WriteToDeviceLocalMemory(vertexOffset, BoxVerts, sizeof(BoxVerts), 0, 1);
 
@@ -859,16 +763,11 @@ void DoSceneStuff()
 
     WriteToDeviceLocalMemory(world2Data, &world[1], 64, 0, MAX_FRAMES_IN_FLIGHT);
 
-    TransitionBufferBarrier(transCmdBuffer, deviceLocalHandle, D3D12_BARRIER_SYNC_COPY, D3D12_BARRIER_ACCESS_COPY_DEST, D3D12_BARRIER_SYNC_DRAW | D3D12_BARRIER_SYNC_INDEX_INPUT, D3D12_BARRIER_ACCESS_VERTEX_BUFFER | D3D12_BARRIER_ACCESS_CONSTANT_BUFFER | D3D12_BARRIER_ACCESS_INDEX_BUFFER);
+    deviceInstance.TransitionBufferBarrier(transferCommandBuffer, buffer->bufferHandle, D3D12_BARRIER_SYNC_COPY, D3D12_BARRIER_ACCESS_COPY_DEST, D3D12_BARRIER_SYNC_DRAW | D3D12_BARRIER_SYNC_INDEX_INPUT, D3D12_BARRIER_ACCESS_VERTEX_BUFFER | D3D12_BARRIER_ACCESS_CONSTANT_BUFFER | D3D12_BARRIER_ACCESS_INDEX_BUFFER);
 
+    bgraImageMemoryPool = deviceInstance.CreateImageResourceFromPool(bgraPool, details.width, details.height, 1, details.miplevels, D3D12_RESOURCE_FLAG_NONE, details.type, D3D12_RESOURCE_DIMENSION_TEXTURE2D);
 
-    ImageMemoryPool* temp = (ImageMemoryPool*)deviceInstance.GetAndValidateItem(bgraPool, D12IMAGEMEMORYPOOL);
-
-    bgraImageMemoryPool = CreatePlacedImageResource(temp, details.width, details.height, 1, details.miplevels, D3D12_RESOURCE_FLAG_NONE, details.type, D3D12_RESOURCE_DIMENSION_TEXTURE2D);
-
-    ID3D12Resource* imageHandle = (ID3D12Resource*)deviceInstance.GetAndValidateItem(bgraImageMemoryPool, D12RESOURCEHANDLE);
-
-    WriteToImageDeviceLocalMemory(imageHandle, details.data, details.width, details.height, 4, details.dataSize, details.type, details.miplevels, 1);
+    WriteToImageDeviceLocalMemory(bgraImageMemoryPool, details.data, details.width, details.height, 4, details.dataSize, details.type, details.miplevels, 1);
 
     int camSRVDS = AllocateShaderResourceSet(mainLayout, 0, MAX_FRAMES_IN_FLIGHT);
 
@@ -889,17 +788,14 @@ void DoSceneStuff()
 
     CreateTablesFromResourceSet(basic1, 2, &triangles[0]);
     CreateTablesFromResourceSet(basic2, 2, &triangles[1]);
-
-    ID3D12DescriptorHeap* srvHeap = (ID3D12DescriptorHeap*)deviceInstance.GetAndValidateItem(mainSRVDescriptorHeap.descriptorHeap, D12DESCRIPTORHEAP);
-    ID3D12DescriptorHeap* samplerHeap = (ID3D12DescriptorHeap*)deviceInstance.GetAndValidateItem(mainSamplerDescriptorHeap.descriptorHeap, D12DESCRIPTORHEAP);
     
     triangles[0].topology = ConvertPrimitiveTypeToD3D12Topology(pipeInfo.primType);
     triangles[0].heapsCount = 2;
     triangles[0].instanceCount = 1;
     triangles[0].vertexCount = 24;
     triangles[0].indexCount = 36;
-    triangles[0].descriptorHeap[0] = srvHeap;
-    triangles[0].descriptorHeap[1] = samplerHeap;
+    triangles[0].descriptorHeap[0] = mainSRVDescriptorHeap;
+    triangles[0].descriptorHeap[1] = mainSamplerDescriptorHeap;
 
 
     triangles[1].topology = ConvertPrimitiveTypeToD3D12Topology(pipeInfo.primType);
@@ -907,8 +803,8 @@ void DoSceneStuff()
     triangles[1].instanceCount = 1;
     triangles[1].vertexCount = 24;
     triangles[1].indexCount = 36;
-    triangles[1].descriptorHeap[0] = srvHeap;
-    triangles[1].descriptorHeap[1] = samplerHeap;
+    triangles[1].descriptorHeap[0] = mainSRVDescriptorHeap;
+    triangles[1].descriptorHeap[1] = mainSamplerDescriptorHeap;
 
     triangles[1].pipelineState = triangles[0].pipelineState;
     triangles[1].rootSignature = triangles[0].rootSignature;
@@ -982,9 +878,9 @@ int main()
         D3D12_DESCRIPTOR_HEAP_FLAG_NONE, &globalDSVDescriptorSize
     );
 
-    CreateDescriptorHeapManager(&mainSRVDescriptorHeap, MAX_FRAMES_IN_FLIGHT * 100, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE);
+    mainSRVDescriptorHeap = deviceInstance.CreateDescriptorHeapManager(MAX_FRAMES_IN_FLIGHT * 100, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE);
 
-    CreateDescriptorHeapManager(&mainSamplerDescriptorHeap, MAX_FRAMES_IN_FLIGHT * 100, D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE);
+    mainSamplerDescriptorHeap = deviceInstance.CreateDescriptorHeapManager(MAX_FRAMES_IN_FLIGHT * 100, D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE);
 
     deviceInstance.CreateRenderTargetView(swapChain, globalRTVDescriptorHeap, swapChainImages, MAX_FRAMES_IN_FLIGHT);
 
@@ -1058,10 +954,38 @@ int main()
     return 0;
 }
 
+
+
+void ReleaseD3D12Resources()
+{
+    deviceInstance.ReleaseAllDriverCOMHandles();
+
+  
+    if (deviceInstance.deviceHandle)
+    {
+        deviceInstance.deviceHandle->Release();
+        deviceInstance.deviceHandle = nullptr;
+    }
+
+#ifdef _DEBUG
+    IDXGIDebug1* dxgiDebug = nullptr;
+    DXGIGetDebugInterface1(0, IID_PPV_ARGS(&dxgiDebug));
+
+    dxgiDebug->ReportLiveObjects(
+        DXGI_DEBUG_ALL,
+        DXGI_DEBUG_RLO_ALL
+    );
+
+    dxgiDebug->Release();
+#endif
+}
+
+
+
 EntryHandle CreatePipelineStateObject(EntryHandle _rootSignature, ShaderHandles* handles, int count, GenericPipelineStateInfo* stateInfo)
 {
-
     ID3D12RootSignature* rootSignH = (ID3D12RootSignature*)deviceInstance.GetAndValidateItem(_rootSignature, D12ROOTSIGNATURE);
+
     ID3D12PipelineState* pipelineState = CreatePipelineStateObject(deviceInstance.deviceHandle, rootSignH, handles, count, stateInfo);
 
     return deviceInstance.AllocTypeForEntry(pipelineState, D12PIPELINESTATE);
@@ -1113,16 +1037,16 @@ ID3D12PipelineState* CreatePipelineStateObject(ID3D12Device2* device, ID3D12Root
 
     int attributeCounter = 0;
 
-    for (UINT i = 0; i < inputCount; i++)
+    for (int i = 0; i < inputCount; i++)
     {
 
         VertexBufferDescription* buffers = &stateInfo->vertexBufferDesc[i];
 
         int attributeCount = buffers->descCount;
 
-        for (UINT j = 0; j < attributeCount; j++)
+        for (int j = 0; j < attributeCount; j++)
         {
-            ConvertVertexLayoutToD3D12InputDesc(&buffers->descriptions[j], &attributeDesc[attributeCounter+j], ConvertVertexRateToD3D12InputClass(buffers->rate), 0, i);
+            ConvertVertexLayoutToD3D12InputDesc(&buffers->descriptions[j], &attributeDesc[attributeCounter + j], ConvertVertexRateToD3D12InputClass(buffers->rate), 0, i);
         }
 
         attributeCounter += attributeCount;
@@ -1148,7 +1072,7 @@ ID3D12PipelineState* CreatePipelineStateObject(ID3D12Device2* device, ID3D12Root
     desc.DepthStencilState.DepthWriteMask = (stateInfo->depthWrite ? D3D12_DEPTH_WRITE_MASK_ALL : D3D12_DEPTH_WRITE_MASK_ZERO);
     desc.DepthStencilState.DepthFunc = ConvertRasterizerTestToD3D12CompareFunc(stateInfo->depthTest);
     desc.DepthStencilState.StencilEnable = stateInfo->StencilEnable;
-  
+
     desc.DepthStencilState.BackFace = ConvertFaceStencilDataToD3D12StencilDesc(stateInfo->backFace);
     desc.DepthStencilState.FrontFace = ConvertFaceStencilDataToD3D12StencilDesc(stateInfo->frontFace);
 
@@ -1179,41 +1103,7 @@ ID3D12PipelineState* CreatePipelineStateObject(ID3D12Device2* device, ID3D12Root
     return pipelineState;
 }
 
-void ReleaseD3D12Resources()
-{
-    deviceInstance.ReleaseAllDriverCOMHandles();
 
-  
-    if (deviceInstance.deviceHandle)
-    {
-        deviceInstance.deviceHandle->Release();
-        deviceInstance.deviceHandle = nullptr;
-    }
-
-#ifdef _DEBUG
-    IDXGIDebug1* dxgiDebug = nullptr;
-    DXGIGetDebugInterface1(0, IID_PPV_ARGS(&dxgiDebug));
-
-    dxgiDebug->ReportLiveObjects(
-        DXGI_DEBUG_ALL,
-        DXGI_DEBUG_RLO_ALL
-    );
-
-    dxgiDebug->Release();
-#endif
-}
-
-
-
-
-
-
-void ExecuteCommandListsOnQueue(EntryHandle queueIndex, ID3D12CommandList** lists, UINT numOfLists)
-{
-    ID3D12CommandQueue* lQueueHandle = (ID3D12CommandQueue*)deviceInstance.GetAndValidateItem(queueIndex, D12QUEUE);
-
-    lQueueHandle->ExecuteCommandLists(numOfLists, lists);
-}
 
 void ResetTransferPool()
 {
@@ -1238,6 +1128,8 @@ int Render()
     auto backBuffer = swapChainImages[currentImageIndex];
 
     auto depthBuffer = swapChainDepthImages[currentImageIndex];
+
+    auto backBufferResource = (ID3D12Resource*)deviceInstance.GetAndValidateItem(backBuffer, D12RESOURCEHANDLE);
 
     ID3D12GraphicsCommandList7* gCommandBuffer = (ID3D12GraphicsCommandList7*)deviceInstance.GetAndValidateItem(graphicCommandBuffer, D12COMMANDBUFFER7);
 
@@ -1273,32 +1165,12 @@ int Render()
 
     
     {
-
-        D3D12_TEXTURE_BARRIER barrierInfo{};
-        barrierInfo.Flags = D3D12_TEXTURE_BARRIER_FLAG_NONE;
-        barrierInfo.pResource = (ID3D12Resource*)deviceInstance.GetAndValidateItem(backBuffer, D12RESOURCEHANDLE);
-        barrierInfo.Subresources.FirstArraySlice = 0;
-        barrierInfo.Subresources.IndexOrFirstMipLevel = 0;
-        barrierInfo.Subresources.FirstPlane = 0;
-        barrierInfo.Subresources.NumArraySlices = 1;
-        barrierInfo.Subresources.NumMipLevels = 1;
-        barrierInfo.Subresources.NumPlanes = 1;
-        barrierInfo.SyncBefore = D3D12_BARRIER_SYNC_NONE;
-        barrierInfo.SyncAfter = D3D12_BARRIER_SYNC_RENDER_TARGET;
-        barrierInfo.AccessBefore = D3D12_BARRIER_ACCESS_NO_ACCESS;
-            
-        barrierInfo.AccessAfter = D3D12_BARRIER_ACCESS_RENDER_TARGET;
-        barrierInfo.LayoutBefore = D3D12_BARRIER_LAYOUT_PRESENT;
-        barrierInfo.LayoutAfter = D3D12_BARRIER_LAYOUT_RENDER_TARGET;
-
-     
-        D3D12_BARRIER_GROUP barrierGroup = {};
-        barrierGroup.Type = D3D12_BARRIER_TYPE_TEXTURE;
-        barrierGroup.NumBarriers = 1;
-        barrierGroup.pTextureBarriers = &barrierInfo;
-
-        gCommandBuffer->Barrier(1, &barrierGroup);
-        const FLOAT clearColor[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+        deviceInstance.TransitionImageResource(gCommandBuffer, backBufferResource,
+            D3D12_BARRIER_SYNC_NONE, D3D12_BARRIER_ACCESS_NO_ACCESS,
+            D3D12_BARRIER_SYNC_RENDER_TARGET, D3D12_BARRIER_ACCESS_RENDER_TARGET,
+            D3D12_BARRIER_LAYOUT_PRESENT, D3D12_BARRIER_LAYOUT_RENDER_TARGET,
+            0, 1, 0, 1
+        );
     }
 
     
@@ -1353,11 +1225,22 @@ int Render()
     for (int i = 0; i < 2; i++)
     {
 
-        ID3D12RootSignature* sign = (ID3D12RootSignature*)deviceInstance.GetAndValidateItem(triangles[0].rootSignature, D12ROOTSIGNATURE);
+        ID3D12RootSignature* sign = (ID3D12RootSignature*)deviceInstance.GetAndValidateItem(triangles[i].rootSignature, D12ROOTSIGNATURE);
 
         gCommandBuffer->SetGraphicsRootSignature(sign);
 
-        gCommandBuffer->SetDescriptorHeaps(triangles[i].heapsCount, triangles[i].descriptorHeap);
+
+        ID3D12DescriptorHeap** heaps = (ID3D12DescriptorHeap**)AllocFromTemp(sizeof(ID3D12DescriptorHeap*) * triangles[i].heapsCount, 4);
+        
+        UINT* heapSizes = (UINT*)AllocFromTemp(sizeof(UINT) * triangles[i].heapsCount, 4);
+
+        for (int j = 0; j < triangles[i].heapsCount; j++)
+        {
+            heaps[j] = (ID3D12DescriptorHeap*)deviceInstance.GetDescriptorHeapFromManager(triangles[i].descriptorHeap[j]);
+            heapSizes[j] = deviceInstance.GetDescriptorHeapSizeFromManager(triangles[i].descriptorHeap[j]);
+        }
+
+        gCommandBuffer->SetDescriptorHeaps(triangles[i].heapsCount, heaps);
 
         ID3D12PipelineState* pipelineState = (ID3D12PipelineState*)deviceInstance.GetAndValidateItem(triangles[i].pipelineState, D12PIPELINESTATE);
 
@@ -1370,8 +1253,7 @@ int Render()
         for (int j = 0; j < triangles[i].descriptorTableCount; j++)
         {
             int heapindex = triangles[i].descriptorHeapSelection[j];
-            int step = (heapindex == 0 ? mainSRVDescriptorHeap.descriptorHeapHandleSize : mainSamplerDescriptorHeap.descriptorHeapHandleSize);
-            CD3DX12_GPU_DESCRIPTOR_HANDLE handle = CD3DX12_GPU_DESCRIPTOR_HANDLE(triangles[i].descriptorHeap[heapindex]->GetGPUDescriptorHandleForHeapStart(), triangles[i].descriptorHeapPointer[j] + (currentFrame * triangles[i].resourceCount[j]), step);
+            CD3DX12_GPU_DESCRIPTOR_HANDLE handle = CD3DX12_GPU_DESCRIPTOR_HANDLE(heaps[heapindex]->GetGPUDescriptorHandleForHeapStart(), triangles[i].descriptorHeapPointer[j] + (currentFrame * triangles[i].resourceCount[j]), heapSizes[heapindex]);
             gCommandBuffer->SetGraphicsRootDescriptorTable(j, handle);
         }
 
@@ -1383,7 +1265,7 @@ int Render()
             ID3D12Resource* vertexBuffer = (ID3D12Resource*)deviceInstance.GetAndValidateItem(triangles[i].vertexBuffer, D12RESOURCEHANDLE);
 
             vertexView.BufferLocation = vertexBuffer->GetGPUVirtualAddress() + triangles[i].vertexBufferOffset;
-            vertexView.SizeInBytes = triangles[i].vertexBufferSize;
+            vertexView.SizeInBytes = (UINT)triangles[i].vertexBufferSize;
             vertexView.StrideInBytes = triangles[i].vertexSize;
 
             gCommandBuffer->IASetVertexBuffers(0, 1, &vertexView);
@@ -1419,31 +1301,13 @@ int Render()
     gCommandBuffer->EndRenderPass();
 
     {
-    
-            D3D12_TEXTURE_BARRIER barrierInfo{};
-            barrierInfo.Flags = D3D12_TEXTURE_BARRIER_FLAG_NONE;
-            barrierInfo.pResource = (ID3D12Resource*)deviceInstance.GetAndValidateItem(backBuffer, D12RESOURCEHANDLE);
-            barrierInfo.Subresources.FirstArraySlice = 0;
-            barrierInfo.Subresources.IndexOrFirstMipLevel = 0;
-            barrierInfo.Subresources.FirstPlane = 0;
-            barrierInfo.Subresources.NumArraySlices = 1;
-            barrierInfo.Subresources.NumMipLevels = 1;
-            barrierInfo.Subresources.NumPlanes = 1;
-            barrierInfo.SyncBefore = D3D12_BARRIER_SYNC_RENDER_TARGET;
-            barrierInfo.SyncAfter = D3D12_BARRIER_SYNC_NONE;
-            barrierInfo.AccessBefore = D3D12_BARRIER_ACCESS_RENDER_TARGET;
-            barrierInfo.AccessAfter = D3D12_BARRIER_ACCESS_NO_ACCESS;
-            barrierInfo.LayoutBefore =  D3D12_BARRIER_LAYOUT_RENDER_TARGET;
-            barrierInfo.LayoutAfter = D3D12_BARRIER_LAYOUT_PRESENT;
-
-    
-            D3D12_BARRIER_GROUP barrierGroup = {};
-            barrierGroup.Type = D3D12_BARRIER_TYPE_TEXTURE;
-            barrierGroup.NumBarriers = 1;
-            barrierGroup.pTextureBarriers = &barrierInfo;
-
-            gCommandBuffer->Barrier(1, &barrierGroup);
-
+            deviceInstance.TransitionImageResource(gCommandBuffer, backBufferResource,
+            
+                D3D12_BARRIER_SYNC_RENDER_TARGET, D3D12_BARRIER_ACCESS_RENDER_TARGET,
+                D3D12_BARRIER_SYNC_NONE, D3D12_BARRIER_ACCESS_NO_ACCESS,
+                 D3D12_BARRIER_LAYOUT_RENDER_TARGET, D3D12_BARRIER_LAYOUT_PRESENT,
+                0, 1, 0, 1
+            );
     }
 
     if (FAILED(gCommandBuffer->Close()))
@@ -1455,7 +1319,7 @@ int Render()
 
     commandLists[cmdListIndex++] = gCommandBuffer;
 
-    ExecuteCommandListsOnQueue(queueHandle, commandLists, cmdListIndex);
+    deviceInstance.ExecuteCommandListsOnQueue(queueHandle, commandLists, cmdListIndex);
 
 
     UINT syncInterval = g_VSync ? 1 : 0;
@@ -1483,275 +1347,40 @@ int Render()
     return 0;
 }
 
-
-
-//D3D12_RESOURCE_DIMENSION_TEXTURE2D
-
-
-ID3D12Resource* CreateCommittedImageResource(ID3D12Device2* device, UINT width, UINT height, UINT depth, UINT mips, D3D12_RESOURCE_FLAGS flags, DXGI_FORMAT format, D3D12_RESOURCE_DIMENSION dimension)
-{
-    D3D12_RESOURCE_DESC imageDesc = {};
-    imageDesc.Dimension = dimension;
-    imageDesc.Alignment = 0;
-    imageDesc.Width = width;
-    imageDesc.Height = height;
-    imageDesc.DepthOrArraySize = depth;
-    imageDesc.MipLevels = mips;
-    imageDesc.Format = format;
-    imageDesc.SampleDesc.Count = 1;
-    imageDesc.SampleDesc.Quality = 0;
-    imageDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-    imageDesc.Flags = flags;
-
-
-    D3D12_HEAP_PROPERTIES heapProps = {};
-    heapProps.Type = D3D12_HEAP_TYPE_DEFAULT; //
-
-    ID3D12Resource* imageHandle = nullptr;
-    device->CreateCommittedResource(
-        &heapProps,
-        D3D12_HEAP_FLAG_NONE,
-        &imageDesc,
-        D3D12_RESOURCE_STATE_COMMON, // initial state
-        nullptr,
-        IID_PPV_ARGS(&imageHandle)
-    );
-
-    return imageHandle;
-}
-
-
-
-ID3D12Resource* CreatePlacedImageResource(ID3D12Device2* device, ImageMemoryPool* pool, UINT width, UINT height, UINT depth, UINT mips, D3D12_RESOURCE_FLAGS flags, DXGI_FORMAT format, D3D12_RESOURCE_DIMENSION dimension)
-{
-
-
-    D3D12_RESOURCE_DESC imageDesc = {};
-    imageDesc.Dimension = dimension;
-    imageDesc.Alignment = 0;
-    imageDesc.Width = width;
-    imageDesc.Height = height;
-    imageDesc.DepthOrArraySize = depth;
-    imageDesc.MipLevels = mips;
-    imageDesc.Format = format;
-    imageDesc.SampleDesc.Count = 1;
-    imageDesc.SampleDesc.Quality = 0;
-    imageDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-    imageDesc.Flags = flags;
-
-    D3D12_RESOURCE_ALLOCATION_INFO allocInfo =
-        device->GetResourceAllocationInfo(0, 1, &imageDesc);
-
-
-    UINT64 location = (pool->currentPointer + allocInfo.Alignment-1) & ~(allocInfo.Alignment-1);
-
-    pool->currentPointer += (allocInfo.SizeInBytes + (location - pool->currentPointer));
-
-    ID3D12Heap* heap = (ID3D12Heap*)deviceInstance.GetAndValidateItem(pool->heap, D12MEMHEAP);
-
-    ID3D12Resource* imageHandle = nullptr;
-    device->CreatePlacedResource(
-        heap,
-        location,
-        &imageDesc,
-        D3D12_RESOURCE_STATE_COMMON,
-        nullptr,
-        IID_PPV_ARGS(&imageHandle)
-    );
-
-    return imageHandle;
-}
-
-EntryHandle CreatePlacedImageResource(ImageMemoryPool* pool, UINT width, UINT height, UINT depth, UINT mips, D3D12_RESOURCE_FLAGS flags, DXGI_FORMAT format, D3D12_RESOURCE_DIMENSION dimension)
-{
-    ID3D12Resource* resource = CreatePlacedImageResource(deviceInstance.deviceHandle, pool, width, height, depth, mips, flags, format, dimension);
-    return deviceInstance.AllocTypeForEntry(resource, D12RESOURCEHANDLE);
-}
-
-void TransitionBufferBarrier(ID3D12GraphicsCommandList7* cmdBuffer, ID3D12Resource* resource, D3D12_BARRIER_SYNC srcSync, D3D12_BARRIER_ACCESS srcAccess,  D3D12_BARRIER_SYNC dstSync, D3D12_BARRIER_ACCESS dstAccess)
-{
-    D3D12_BUFFER_BARRIER barrierInfo{};
-    barrierInfo.pResource = resource;
-    barrierInfo.SyncBefore = srcSync;
-    barrierInfo.SyncAfter = dstSync;
-    barrierInfo.AccessBefore = srcAccess;
-    barrierInfo.AccessAfter = dstAccess;
-    barrierInfo.Offset = 0;
-    barrierInfo.Size = UINT64_MAX;
-
-    D3D12_BARRIER_GROUP barrierGroup = {};
-    barrierGroup.Type = D3D12_BARRIER_TYPE_BUFFER;
-    barrierGroup.NumBarriers = 1;
-    barrierGroup.pBufferBarriers = &barrierInfo;
-
-    cmdBuffer->Barrier(1, &barrierGroup);
-}
-
 void WriteToDeviceLocalMemory(int allocationIndex, void* data, size_t size, size_t offset, int copies)
 {
-    ID3D12GraphicsCommandList7* transCommandBuffer = (ID3D12GraphicsCommandList7*)deviceInstance.GetAndValidateItem(transferCommandBuffer, D12COMMANDBUFFER7);
-
-	void* mappedData = nullptr;
-
+    
 	Allocation* alloc = &allocationHandle[allocationIndex];
 
     size_t stride = (alloc->requestedsize + alloc->alignment - 1) & ~(alloc->alignment - 1);
 
-    DriverMemoryBuffer* dmb = (DriverMemoryBuffer*)deviceInstance.GetAndValidateItem(stagingBuffers[currentFrame], D12BUFFERMEMORYPOOL);
-
-    size_t allocLoc = AllocFromDriverMemoryBuffer(dmb, stride*copies, alloc->alignment);
-
-    ID3D12Resource* stagingBuffer = (ID3D12Resource*)deviceInstance.GetAndValidateItem(dmb->bufferHandle, D12RESOURCEHANDLE);
-
-    ID3D12Resource* dstBuffer = (ID3D12Resource*)deviceInstance.GetAndValidateItem(alloc->bufferHandle, D12RESOURCEHANDLE);
-
-	stagingBuffer->Map(0, nullptr, &mappedData);
-
-    uintptr_t cdata = (uintptr_t)(mappedData)+allocLoc;
-
-	for (int i = 0; i < copies; i++)
-	{
-		memcpy((void*)(cdata), data, size);
-		cdata += stride;
-	}
-	stagingBuffer->Unmap(0, nullptr);
-
-	transCommandBuffer->CopyBufferRegion(dstBuffer, alloc->offset + offset, stagingBuffer, allocLoc, stride * copies);
+    deviceInstance.WriteToDeviceLocalMemory(alloc->bufferHandle, stagingBuffers[currentFrame], transferCommandBuffer, data, size, alloc->offset + offset, stride, copies);
 
 	transferCommandsUploaded++;
 }
 
-void WriteToImageDeviceLocalMemory(ID3D12Resource* imageHandle, char* data, UINT width, UINT height, UINT componentCount, UINT totalImageSize, DXGI_FORMAT format, UINT mipLevels, UINT layers)
+void WriteToImageDeviceLocalMemory(EntryHandle imageHandle, char* data, UINT width, UINT height, UINT componentCount, UINT totalImageSize, DXGI_FORMAT format, UINT mipLevels, UINT layers)
 {
-    void* mappedData = nullptr;
-
-    size_t stride = ((width * componentCount) + (255)) & ~255;
-
-    DriverMemoryBuffer* dmb = (DriverMemoryBuffer*)deviceInstance.GetAndValidateItem(stagingBuffers[currentFrame], D12BUFFERMEMORYPOOL);
-
-    size_t allocLoc = AllocFromDriverMemoryBuffer(dmb, stride * height, 255);
-
-    ID3D12Resource* stagingBuffer = (ID3D12Resource*)deviceInstance.GetAndValidateItem(dmb->bufferHandle, D12RESOURCEHANDLE);
-
-    stagingBuffer->Map(0, nullptr, &mappedData);
-
-    uintptr_t cdata = (uintptr_t)(mappedData)+allocLoc;
-
-    for (int i = 0; i < height; i++)
-    {
-        memcpy((void*)(cdata), data + (i * width * componentCount), width * componentCount);
-        cdata += stride;
-    }
-
-
-    stagingBuffer->Unmap(0, nullptr);
-
-    ID3D12GraphicsCommandList7* transCommandBuffer = (ID3D12GraphicsCommandList7*)deviceInstance.GetAndValidateItem(transferCommandBuffer, D12COMMANDBUFFER7);
-    
-    D3D12_RESOURCE_BARRIER preBarrier = {};
-    preBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    preBarrier.Transition.pResource = imageHandle;
-    preBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COMMON;
-    preBarrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
-    preBarrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-
-
-    D3D12_TEXTURE_BARRIER barrierInfo{};
-    barrierInfo.Flags = D3D12_TEXTURE_BARRIER_FLAG_NONE;
-    barrierInfo.pResource = imageHandle;
-    barrierInfo.Subresources.FirstArraySlice = 0;
-    barrierInfo.Subresources.IndexOrFirstMipLevel = 0;
-    barrierInfo.Subresources.FirstPlane = 0;
-    barrierInfo.Subresources.NumArraySlices = layers;
-    barrierInfo.Subresources.NumMipLevels = mipLevels;
-    barrierInfo.Subresources.NumPlanes = 1;
-    barrierInfo.SyncBefore = D3D12_BARRIER_SYNC_NONE;
-    barrierInfo.SyncAfter = D3D12_BARRIER_SYNC_COPY;
-    barrierInfo.AccessBefore = D3D12_BARRIER_ACCESS_NO_ACCESS;
-    barrierInfo.AccessAfter = D3D12_BARRIER_ACCESS_COPY_DEST;
-    barrierInfo.LayoutBefore = D3D12_BARRIER_LAYOUT_COMMON;
-    barrierInfo.LayoutAfter = D3D12_BARRIER_LAYOUT_COPY_DEST;
-
-
-    D3D12_BARRIER_GROUP barrierGroup = {};
-    barrierGroup.Type = D3D12_BARRIER_TYPE_TEXTURE;
-    barrierGroup.NumBarriers = 1;
-    barrierGroup.pTextureBarriers = &barrierInfo;
-
-    transCommandBuffer->Barrier(1, &barrierGroup);
-
-    D3D12_TEXTURE_COPY_LOCATION dest{}, src{};
-
-    src.pResource = stagingBuffer;
-    src.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
-    src.PlacedFootprint.Offset = allocLoc;
-    src.PlacedFootprint.Footprint.Depth = 1;
-    src.PlacedFootprint.Footprint.Width = width;
-    src.PlacedFootprint.Footprint.Height = height;
-    src.PlacedFootprint.Footprint.Format = format;
-    src.PlacedFootprint.Footprint.RowPitch = stride;
-
-
-    dest.pResource = imageHandle;
-    dest.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-    dest.SubresourceIndex = 0;
-
-    transCommandBuffer->CopyTextureRegion(&dest, 0, 0, 0, &src, NULL);
-
-    D3D12_RESOURCE_BARRIER postBarrier = {};
-    postBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    postBarrier.Transition.pResource = imageHandle;
-    postBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
-    postBarrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-    postBarrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-
-    barrierInfo.Flags = D3D12_TEXTURE_BARRIER_FLAG_NONE;
-    barrierInfo.pResource = imageHandle;
-    barrierInfo.Subresources.FirstArraySlice = 0;
-    barrierInfo.Subresources.IndexOrFirstMipLevel = 0;
-    barrierInfo.Subresources.FirstPlane = 0;
-    barrierInfo.Subresources.NumArraySlices = layers;
-    barrierInfo.Subresources.NumMipLevels = mipLevels;
-    barrierInfo.Subresources.NumPlanes = 1;
-    barrierInfo.SyncBefore = D3D12_BARRIER_SYNC_COPY;
-    barrierInfo.SyncAfter = D3D12_BARRIER_SYNC_PIXEL_SHADING;
-    barrierInfo.AccessBefore = D3D12_BARRIER_ACCESS_COPY_DEST;
-    barrierInfo.AccessAfter = D3D12_BARRIER_ACCESS_SHADER_RESOURCE;
-    barrierInfo.LayoutBefore = D3D12_BARRIER_LAYOUT_COPY_DEST;
-    barrierInfo.LayoutAfter = D3D12_BARRIER_LAYOUT_SHADER_RESOURCE;
-
-    transCommandBuffer->Barrier(1, &barrierGroup);
+    deviceInstance.WriteToImageDeviceLocalMemory(imageHandle, transferCommandBuffer, stagingBuffers[currentFrame],
+        data, width, height, componentCount, totalImageSize, format, mipLevels, layers
+    );
 
     transferCommandsUploaded++;
 }
 
-void CreateImageSampler(ID3D12Device2* device, DescriptorHeap* samplerDescriptorHeap)
+void WriteToHostMemory(int allocationIndex, void* data, size_t size, size_t offset, int copies)
 {
+    void* mappedData = nullptr;
 
-    ID3D12DescriptorHeap* sampDescriptor = (ID3D12DescriptorHeap*)deviceInstance.GetAndValidateItem(samplerDescriptorHeap->descriptorHeap, D12DESCRIPTORHEAP);
+    Allocation* alloc = &allocationHandle[allocationIndex];
 
-    CD3DX12_CPU_DESCRIPTOR_HANDLE samplerHandle(sampDescriptor->GetCPUDescriptorHandleForHeapStart(), samplerDescriptorHeap->descriptorHeapHandlePointer, samplerDescriptorHeap->descriptorHeapHandleSize);
+    size_t stride = (alloc->requestedsize + alloc->alignment - 1) & ~(alloc->alignment - 1);
 
-
-    D3D12_SAMPLER_DESC samplerDesc = {};
-    samplerDesc.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR; 
-    samplerDesc.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-    samplerDesc.AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP; 
-    samplerDesc.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP; 
-    samplerDesc.MipLODBias = 0.0f;                          
-    samplerDesc.MaxAnisotropy = 1;                        
-    samplerDesc.ComparisonFunc = D3D12_COMPARISON_FUNC_NONE;
-    samplerDesc.BorderColor[0] = 0.0f;                      
-    samplerDesc.BorderColor[1] = 0.0f;
-    samplerDesc.BorderColor[2] = 0.0f;
-    samplerDesc.BorderColor[3] = 0.0f;
-    samplerDesc.MinLOD = 0.0f;                              
-    samplerDesc.MaxLOD = D3D12_FLOAT32_MAX;                
-
-    deviceInstance.deviceHandle->CreateSampler(&samplerDesc, samplerHandle);
-
-    samplerDescriptorHeap->descriptorHeapHandlePointer++;
+    deviceInstance.WriteToHostMemory(alloc->bufferHandle, data, size, alloc->offset + offset, stride, copies);
 }
+
+
+
 
 int PollDX12WindowEvents()
 {
@@ -1835,151 +1464,6 @@ LRESULT CALLBACK winproc(HWND hwnd, UINT wm, WPARAM wp, LPARAM lp)
     }
 
     return DefWindowProc(hwnd, wm, wp, lp);
-}
-
-void WriteToHostMemory(int allocationIndex, void* data, size_t size, size_t offset, int copies)
-{
-    void* mappedData = nullptr;
- 
-    Allocation* alloc = &allocationHandle[allocationIndex];
-
-    ID3D12Resource* buffer = (ID3D12Resource*)deviceInstance.GetAndValidateItem(alloc->bufferHandle, D12RESOURCEHANDLE);
-
-
-    buffer->Map(0, nullptr, &mappedData);
-
-    uintptr_t cdata = (uintptr_t)(mappedData);
-
-    size_t stride = (alloc->requestedsize + alloc->alignment - 1) & ~(alloc->alignment - 1);
-
-    for (int i = 0; i < copies; i++)
-    {
-        memcpy((void*)(cdata+alloc->offset+offset), data, size);
-        offset += stride;
-    }
-
-
-    buffer->Unmap(0, nullptr);
-
-}
-
-void CreateImageSRVDescriptorHandle(ID3D12Device2* device, ID3D12Resource* bufferHandle, UINT mipsLevels, DXGI_FORMAT format, DescriptorHeap* heap, D3D12_SRV_DIMENSION dimension)
-{
-    ID3D12DescriptorHeap* srvDescriptor = (ID3D12DescriptorHeap*)deviceInstance.GetAndValidateItem(heap->descriptorHeap, D12DESCRIPTORHEAP);
-
-    CD3DX12_CPU_DESCRIPTOR_HANDLE srvHandle(srvDescriptor->GetCPUDescriptorHandleForHeapStart(), heap->descriptorHeapHandlePointer, heap->descriptorHeapHandleSize);
-
-    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
-    srvDesc.ViewDimension = dimension;
-    srvDesc.Format = format; // structured buffer
-    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-    srvDesc.Texture2D.MipLevels = 1;
-
-    device->CreateShaderResourceView(bufferHandle, &srvDesc, srvHandle);
-
-    heap->descriptorHeapHandlePointer++;
-}
-
-void CreateSRVDescriptorHandle(ID3D12Device2* device, ID3D12Resource* bufferHandle, UINT offset, UINT numCount, UINT size, DXGI_FORMAT format, DescriptorHeap* heap, D3D12_SRV_DIMENSION dimension)
-{
-   
-    UINT firstElement = offset / size;
-
-
-    ID3D12DescriptorHeap* srvDescriptor = (ID3D12DescriptorHeap*)deviceInstance.GetAndValidateItem(heap->descriptorHeap, D12DESCRIPTORHEAP);
-
-    CD3DX12_CPU_DESCRIPTOR_HANDLE srvHandle(srvDescriptor->GetCPUDescriptorHandleForHeapStart(), heap->descriptorHeapHandlePointer, heap->descriptorHeapHandleSize);
-
-    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
-    srvDesc.ViewDimension = dimension;
-    srvDesc.Format = format; // structured buffer
-    srvDesc.Buffer.FirstElement = firstElement;
-    srvDesc.Buffer.NumElements = numCount;
-    srvDesc.Buffer.StructureByteStride = size;
-    srvDesc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
-    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-
-    device->CreateShaderResourceView(bufferHandle, &srvDesc, srvHandle);
-
-    heap->descriptorHeapHandlePointer++;
-
-}
-
-void CreateUAVDescriptorHandle(ID3D12Device2* device, ID3D12Resource* bufferHandle, UINT offset, UINT numCount, UINT size, DXGI_FORMAT format, DescriptorHeap* heap)
-{
-
-    UINT firstElement = offset / size;
-
-
-    ID3D12DescriptorHeap* uavDescriptor = (ID3D12DescriptorHeap*)deviceInstance.GetAndValidateItem(heap->descriptorHeap, D12DESCRIPTORHEAP);
-
-    CD3DX12_CPU_DESCRIPTOR_HANDLE uavHandle(uavDescriptor->GetCPUDescriptorHandleForHeapStart(), heap->descriptorHeapHandlePointer, heap->descriptorHeapHandleSize);
-
-
-    D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
-
-    uavDesc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
-    uavDesc.Format = DXGI_FORMAT_UNKNOWN; // structured buffer
-    uavDesc.Buffer.FirstElement = firstElement;
-    uavDesc.Buffer.NumElements = numCount;
-    uavDesc.Buffer.StructureByteStride = size;
-    uavDesc.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_NONE;
-
-
-    device->CreateUnorderedAccessView(bufferHandle, nullptr, &uavDesc, uavHandle);
-
-    heap->descriptorHeapHandlePointer++;
-
-}
-
-void CreateCBVDescriptorHandle(ID3D12Device2* device, ID3D12Resource* bufferHandle, UINT offset, UINT size, DescriptorHeap* heap)
-{
-    ID3D12DescriptorHeap* cbvDescriptor = (ID3D12DescriptorHeap*)deviceInstance.GetAndValidateItem(heap->descriptorHeap, D12DESCRIPTORHEAP);
-
-    CD3DX12_CPU_DESCRIPTOR_HANDLE cbvHandle(cbvDescriptor->GetCPUDescriptorHandleForHeapStart(), heap->descriptorHeapHandlePointer, heap->descriptorHeapHandleSize);
-
-
-    D3D12_CONSTANT_BUFFER_VIEW_DESC cbvDesc = {};
-
-    cbvDesc.BufferLocation = bufferHandle->GetGPUVirtualAddress() + offset;
-    cbvDesc.SizeInBytes = (size + (255)) & ~255;
-
-    device->CreateConstantBufferView(&cbvDesc, cbvHandle);
-
-    heap->descriptorHeapHandlePointer++;
-
-}
-
-ID3D12RootSignature* CreateRootSignature(ID3D12Device2* device, CD3DX12_ROOT_PARAMETER* rootParameters, UINT parameterCount, D3D12_ROOT_SIGNATURE_FLAGS flags)
-{
-    ID3D12RootSignature* rootSignature;
-
-    ID3DBlob* rootSigDescriptorLayout;
-
-    CD3DX12_ROOT_SIGNATURE_DESC rsigDesc = {};
-
-    rsigDesc.Init(parameterCount, rootParameters, 0, nullptr, flags);
-
-
-    D3D12SerializeRootSignature(&rsigDesc, D3D_ROOT_SIGNATURE_VERSION_1, &rootSigDescriptorLayout, nullptr);
-
-    HRESULT hr = device->CreateRootSignature(0, rootSigDescriptorLayout->GetBufferPointer(), rootSigDescriptorLayout->GetBufferSize(), IID_PPV_ARGS(&rootSignature));
-
-    if (FAILED(hr))
-    {
-        printf("Failed to create root signature\n");
-    }
-
-    rootSigDescriptorLayout->Release();
-
-    return rootSignature;
-};
-
-EntryHandle CreateRootSignature(CD3DX12_ROOT_PARAMETER* rootParameters, UINT parameterCount, D3D12_ROOT_SIGNATURE_FLAGS flags)
-{
-    ID3D12RootSignature* rootSignature = CreateRootSignature(deviceInstance.deviceHandle, rootParameters, parameterCount, flags);
-
-    return deviceInstance.AllocTypeForEntry(rootSignature, D12ROOTSIGNATURE);
 }
 
 EntryHandle CreateRootSignatureFromShaderGraph(ShaderGraph* graph)
@@ -2137,22 +1621,17 @@ EntryHandle CreateRootSignatureFromShaderGraph(ShaderGraph* graph)
         rootParameters[numRootParameters - 1].InitAsDescriptorTable(samplerCount, ranges + rangeIterIndex, visible);
     }
    
-    EntryHandle rootSignature = CreateRootSignature(rootParameters, numRootParameters, D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
+    EntryHandle rootSignature = deviceInstance.CreateRootSignature(rootParameters, numRootParameters, D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
 
     return rootSignature;
 }
 
-void CreateDescriptorHeapManager(DescriptorHeap* heap, UINT maxDescriptorHandles, D3D12_DESCRIPTOR_HEAP_TYPE type, D3D12_DESCRIPTOR_HEAP_FLAGS flags)
+int CreateDescriptorTable(uintptr_t header, int descriptorCount, int frameCount, EntryHandle heapIdx)
 {
-    heap->descriptorHeap = deviceInstance.CreateDescriptorHeap(type, maxDescriptorHandles, flags, &heap->descriptorHeapHandleSize);
-    heap->maxDescriptorHeapHandles = maxDescriptorHandles;
-    heap->descriptorHeapHandlePointer = 0;
-    heap->type = type;
-}
+    DescriptorHeapManager* heap = (DescriptorHeapManager*)deviceInstance.GetAndValidateItem(heapIdx, D12DESCRIPTORMANAGER);
 
-int CreateDescriptorTable(uintptr_t header, int descriptorCount, int frameCount, DescriptorHeap* heap)
-{
     int heapstart = heap->descriptorHeapHandlePointer;
+
     for (int i = 0; i < frameCount; i++)
     {
         uintptr_t ptr = header;
@@ -2171,9 +1650,9 @@ int CreateDescriptorTable(uintptr_t header, int descriptorCount, int frameCount,
 
                 Allocation* alloc = &allocationHandle[cbType->allocationIndex];
 
-                ID3D12Resource* constant = (ID3D12Resource*)deviceInstance.GetAndValidateItem(alloc->bufferHandle, D12RESOURCEHANDLE);
+                
 
-                CreateCBVDescriptorHandle(deviceInstance.deviceHandle, constant, i * alloc->stridesize + alloc->offset, alloc->stridesize , heap);
+                deviceInstance.CreateCBVDescriptorHandle(alloc->bufferHandle, i * alloc->stridesize + alloc->offset, alloc->stridesize , heap);
 
                 ptr += sizeof(DescriptorTypeConstantBuffer);
                 break;
@@ -2184,10 +1663,10 @@ int CreateDescriptorTable(uintptr_t header, int descriptorCount, int frameCount,
 
                 Allocation* alloc = &allocationHandle[ubType->allocationIndex];
 
-                ID3D12Resource* ubv = (ID3D12Resource*)deviceInstance.GetAndValidateItem(alloc->bufferHandle, D12RESOURCEHANDLE);
+             
 
-                CreateSRVDescriptorHandle(deviceInstance.deviceHandle,
-                    ubv, i * alloc->stridesize + alloc->offset,
+                deviceInstance.CreateSRVDescriptorHandle(alloc->bufferHandle,
+                    i * alloc->stridesize + alloc->offset,
                     ubType->numberOfElements, alloc->requestedsize,
                     ubType->format,
                     heap,
@@ -2203,10 +1682,9 @@ int CreateDescriptorTable(uintptr_t header, int descriptorCount, int frameCount,
                 DescriptorTypeImageSRV* ubType = (DescriptorTypeImageSRV*)header;
 
                 
-                ID3D12Resource* image = (ID3D12Resource*)deviceInstance.GetAndValidateItem(ubType->image, D12RESOURCEHANDLE);
-
-                CreateImageSRVDescriptorHandle(deviceInstance.deviceHandle,
-                    image,
+                
+                deviceInstance.CreateImageSRVDescriptorHandle(
+                    ubType->image,
                     1,
                     ubType->format,
                     heap,
@@ -2218,7 +1696,7 @@ int CreateDescriptorTable(uintptr_t header, int descriptorCount, int frameCount,
                 break;
             }
             case SAMPLERSTATE:
-                CreateImageSampler(deviceInstance.deviceHandle, heap);
+                deviceInstance.CreateImageSampler(heap);
                 ptr += sizeof(DescriptorTypeImageSRV);
                 break;
             }
@@ -2434,7 +1912,7 @@ void CreateTablesFromResourceSet(int* descriptorsets, int numDescriptorSet, Pipe
         }
         else 
         {
-            obj->descriptorHeapPointer[i] = CreateDescriptorTable(dx12Descriptions, currentTableCount, MAX_FRAMES_IN_FLIGHT, &mainSRVDescriptorHeap);
+            obj->descriptorHeapPointer[i] = CreateDescriptorTable(dx12Descriptions, currentTableCount, MAX_FRAMES_IN_FLIGHT, mainSRVDescriptorHeap);
             srvDescriptorTablesStart[descriptorsets[i]] = obj->descriptorHeapPointer[i];
         }
 
@@ -2445,7 +1923,7 @@ void CreateTablesFromResourceSet(int* descriptorsets, int numDescriptorSet, Pipe
 
     if (samplerCount)
     {
-        obj->descriptorHeapPointer[numDescriptorSet] = CreateDescriptorTable(dx12Sampler, samplerCount, MAX_FRAMES_IN_FLIGHT, &mainSamplerDescriptorHeap);
+        obj->descriptorHeapPointer[numDescriptorSet] = CreateDescriptorTable(dx12Sampler, samplerCount, MAX_FRAMES_IN_FLIGHT, mainSamplerDescriptorHeap);
         obj->resourceCount[numDescriptorSet] = samplerCount;
         obj->descriptorHeapSelection[numDescriptorSet] = 1;
         descriptorTableCount++;
@@ -2479,7 +1957,7 @@ ShaderGraph* CreateShaderGraph(
 
     char* data = (char*)AllocFromTemp(fileHandle.fileLength, 64);
 
-    shaderGraphSize = fileHandle.fileLength;
+    int shaderGraphSize = fileHandle.fileLength;
 
     OSReadFile(&fileHandle, fileHandle.fileLength, data);
 
@@ -2779,3 +2257,6 @@ void CreatePipelineDescription(const std::string& filename, GenericPipelineState
 
     }
 }
+
+
+

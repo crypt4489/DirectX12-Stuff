@@ -21,6 +21,9 @@
     <ClCompile Include="DX12Device.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="APIConversionFunctions.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="d3dx12.h">
@@ -33,6 +36,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="DX12Device.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="APIConversionFunctions.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

@@ -1,4 +1,6 @@
 #pragma once
+#include <string>
+#include <array>
 #include "Files.h"
 enum class ComponentFormatType
 {
@@ -314,7 +316,6 @@ hash(const std::string& string)
     return hash;
 }
 
-size_t shaderGraphSize = 0;
 char readerMemBuffer[64 * 1024];
 size_t readerMemBufferAllocate = 0;
 
@@ -2132,3 +2133,4 @@ int HandleVertexInput(char* fileData, int size, int currentLocation, GenericPipe
 }
 
 void CreatePipelineDescription(const std::string& filename, GenericPipelineStateInfo* stateInfo);
+
