@@ -1,4 +1,5 @@
 #include "DX12Device.h"
+#include <stdio.h>
 IDXGIAdapter4* DX12Device::GetAdapter(UINT createFactoryFlags)
 {
     IDXGIFactory4* dxgiFactory;
@@ -315,7 +316,7 @@ int DX12Device::CreateRenderTargetView(EntryHandle swapChainIdx, EntryHandle des
     IDXGISwapChain4* swapChain = (IDXGISwapChain4*)GetAndValidateItem(swapChainIdx, DXGISWAPCHAIN);
     ID3D12DescriptorHeap* heap = (ID3D12DescriptorHeap*)GetAndValidateItem(descriptorHeapIdx, D12DESCRIPTORHEAP);
 
-    CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(heap->GetCPUDescriptorHandleForHeapStart());
+    DX12CPUDescriptorHandle rtvHandle(heap->GetCPUDescriptorHandleForHeapStart());
 
     for (UINT i = 0; i < imageCount; ++i)
     {
@@ -329,7 +330,7 @@ int DX12Device::CreateRenderTargetView(EntryHandle swapChainIdx, EntryHandle des
 
         deviceHandle->CreateRenderTargetView(backBuffer, NULL, rtvHandle);
 
-        rtvHandle.Offset(rtvDescriptorSize);
+        rtvHandle.Advance(1, rtvDescriptorSize);
 
         outBuffers[i] = AllocTypeForEntry(backBuffer, D12RESOURCEHANDLE);
     }
@@ -404,7 +405,7 @@ int DX12Device::CreateDepthStencilView(EntryHandle descriptorHeapIdx, EntryHandl
 
     ImageMemoryPool* pool = (ImageMemoryPool*)GetAndValidateItem(poolIdx, D12IMAGEMEMORYPOOL);
 
-    CD3DX12_CPU_DESCRIPTOR_HANDLE dsvHandle(descHeap->GetCPUDescriptorHandleForHeapStart());
+    DX12CPUDescriptorHandle dsvHandle(descHeap->GetCPUDescriptorHandleForHeapStart());
 
     ID3D12Heap* heap = (ID3D12Heap*)GetAndValidateItem(pool->heap, D12MEMHEAP);
 
@@ -451,7 +452,7 @@ int DX12Device::CreateDepthStencilView(EntryHandle descriptorHeapIdx, EntryHandl
 
         deviceHandle->CreateDepthStencilView(depthBuffer, &dsvDesc, dsvHandle);
 
-        dsvHandle.Offset(dsvDescriptorSize);
+        dsvHandle.Advance(1, dsvDescriptorSize);
 
         outBuffers[i] = AllocTypeForEntry(depthBuffer, D12RESOURCEHANDLE);
     }
@@ -1076,17 +1077,19 @@ EntryHandle DX12Device::CreateImageResourceFromPool(EntryHandle poolIdx, UINT wi
     return AllocTypeForEntry(resource, D12RESOURCEHANDLE);
 }
 
-
-
-EntryHandle DX12Device::CreateRootSignature(CD3DX12_ROOT_PARAMETER* rootParameters, UINT parameterCount, D3D12_ROOT_SIGNATURE_FLAGS flags)
+EntryHandle DX12Device::CreateRootSignature(DX12RootSignatureCreate* createInfo, D3D12_ROOT_SIGNATURE_FLAGS flags)
 {
     ID3D12RootSignature* rootSignature;
 
     ID3DBlob* rootSigDescriptorLayout;
 
-    CD3DX12_ROOT_SIGNATURE_DESC rsigDesc = {};
+    D3D12_ROOT_SIGNATURE_DESC rsigDesc = {};
 
-    rsigDesc.Init(parameterCount, rootParameters, 0, nullptr, flags);
+    rsigDesc.NumParameters = createInfo->numOfRootParameters;
+    rsigDesc.pParameters = createInfo->rootParameters;
+    rsigDesc.NumStaticSamplers = 0;
+    rsigDesc.pStaticSamplers = NULL;
+    rsigDesc.Flags = flags;
 
     D3D12SerializeRootSignature(&rsigDesc, D3D_ROOT_SIGNATURE_VERSION_1, &rootSigDescriptorLayout, nullptr);
 
@@ -1107,7 +1110,7 @@ void DX12Device::CreateImageSampler(DescriptorHeapManager* samplerDescriptorHeap
 {
     ID3D12DescriptorHeap* sampDescriptor = (ID3D12DescriptorHeap*)GetAndValidateItem(samplerDescriptorHeap->descriptorHeap, D12DESCRIPTORHEAP);
 
-    CD3DX12_CPU_DESCRIPTOR_HANDLE samplerHandle(sampDescriptor->GetCPUDescriptorHandleForHeapStart(), samplerDescriptorHeap->descriptorHeapHandlePointer, samplerDescriptorHeap->descriptorHeapHandleSize);
+    DX12CPUDescriptorHandle samplerHandle(sampDescriptor->GetCPUDescriptorHandleForHeapStart(), samplerDescriptorHeap->descriptorHeapHandlePointer, samplerDescriptorHeap->descriptorHeapHandleSize);
 
     D3D12_SAMPLER_DESC samplerDesc = {};
     samplerDesc.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
@@ -1136,7 +1139,7 @@ void DX12Device::CreateImageSRVDescriptorHandle(EntryHandle bufferPoolHandle, UI
 
     ID3D12Resource* bufferHandle = (ID3D12Resource*)GetAndValidateItem(bufferPoolHandle, D12RESOURCEHANDLE);
 
-    CD3DX12_CPU_DESCRIPTOR_HANDLE srvHandle(srvDescriptor->GetCPUDescriptorHandleForHeapStart(), heap->descriptorHeapHandlePointer, heap->descriptorHeapHandleSize);
+    DX12CPUDescriptorHandle srvHandle(srvDescriptor->GetCPUDescriptorHandleForHeapStart(), heap->descriptorHeapHandlePointer, heap->descriptorHeapHandleSize);
 
     D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
     srvDesc.ViewDimension = dimension;
@@ -1158,7 +1161,7 @@ void DX12Device::CreateSRVDescriptorHandle(EntryHandle bufferPoolHandle, UINT of
 
     ID3D12DescriptorHeap* srvDescriptor = (ID3D12DescriptorHeap*)GetAndValidateItem(heap->descriptorHeap, D12DESCRIPTORHEAP);
 
-    CD3DX12_CPU_DESCRIPTOR_HANDLE srvHandle(srvDescriptor->GetCPUDescriptorHandleForHeapStart(), heap->descriptorHeapHandlePointer, heap->descriptorHeapHandleSize);
+    DX12CPUDescriptorHandle srvHandle(srvDescriptor->GetCPUDescriptorHandleForHeapStart(), heap->descriptorHeapHandlePointer, heap->descriptorHeapHandleSize);
 
     D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
     srvDesc.ViewDimension = dimension;
@@ -1184,7 +1187,7 @@ void DX12Device::CreateUAVDescriptorHandle(EntryHandle bufferPoolHandle, UINT of
 
     ID3D12DescriptorHeap* uavDescriptor = (ID3D12DescriptorHeap*)GetAndValidateItem(heap->descriptorHeap, D12DESCRIPTORHEAP);
 
-    CD3DX12_CPU_DESCRIPTOR_HANDLE uavHandle(uavDescriptor->GetCPUDescriptorHandleForHeapStart(), heap->descriptorHeapHandlePointer, heap->descriptorHeapHandleSize);
+    DX12CPUDescriptorHandle uavHandle(uavDescriptor->GetCPUDescriptorHandleForHeapStart(), heap->descriptorHeapHandlePointer, heap->descriptorHeapHandleSize);
 
 
     D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
@@ -1207,7 +1210,7 @@ void DX12Device::CreateCBVDescriptorHandle(EntryHandle bufferPoolHandle, UINT of
 {
     ID3D12DescriptorHeap* cbvDescriptor = (ID3D12DescriptorHeap*)GetAndValidateItem(heap->descriptorHeap, D12DESCRIPTORHEAP);
 
-    CD3DX12_CPU_DESCRIPTOR_HANDLE cbvHandle(cbvDescriptor->GetCPUDescriptorHandleForHeapStart(), heap->descriptorHeapHandlePointer, heap->descriptorHeapHandleSize);
+    DX12CPUDescriptorHandle cbvHandle(cbvDescriptor->GetCPUDescriptorHandleForHeapStart(), heap->descriptorHeapHandlePointer, heap->descriptorHeapHandleSize);
 
     ID3D12Resource* bufferHandle = GetResourceHandleForMemoryBuffer(bufferPoolHandle);
 

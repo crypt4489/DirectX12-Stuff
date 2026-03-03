@@ -514,8 +514,7 @@ XMMATRIX world[2];
 Camera cam;
 
 
-EntryHandle CreatePipelineStateObject(EntryHandle _rootSignature, ShaderHandles* handles, int count, GenericPipelineStateInfo* stateInfo);
-ID3D12PipelineState* CreatePipelineStateObject(ID3D12Device2* device, ID3D12RootSignature* _rootSignature, ShaderHandles* handles, int count, GenericPipelineStateInfo* stateInfo);
+EntryHandle CreatePipelineStateObject(EntryHandle rootSignature, ShaderHandles* handles, int shaderCount, GenericPipelineStateInfo* stateInfo);
 
 PipelineObject triangles[2];
 
@@ -982,40 +981,29 @@ void ReleaseD3D12Resources()
 
 
 
-EntryHandle CreatePipelineStateObject(EntryHandle _rootSignature, ShaderHandles* handles, int count, GenericPipelineStateInfo* stateInfo)
+
+
+EntryHandle CreatePipelineStateObject(EntryHandle rootSignature, ShaderHandles* handles, int shaderCount, GenericPipelineStateInfo* stateInfo)
 {
-    ID3D12RootSignature* rootSignH = (ID3D12RootSignature*)deviceInstance.GetAndValidateItem(_rootSignature, D12ROOTSIGNATURE);
 
-    ID3D12PipelineState* pipelineState = CreatePipelineStateObject(deviceInstance.deviceHandle, rootSignH, handles, count, stateInfo);
+    DX12PipelineStateObjectCreate createInfo{};
 
-    return deviceInstance.AllocTypeForEntry(pipelineState, D12PIPELINESTATE);
-}
-
-ID3D12PipelineState* CreatePipelineStateObject(ID3D12Device2* device, ID3D12RootSignature* _rootSignature, ShaderHandles* handles, int count, GenericPipelineStateInfo* stateInfo)
-{
-    ID3D12PipelineState* pipelineState;
-
-    HRESULT hr;
-
-    D3D12_GRAPHICS_PIPELINE_STATE_DESC desc{};
-    desc.pRootSignature = _rootSignature;
-
-    for (int i = 0; i < count; i++)
+    for (int i = 0; i < shaderCount; i++)
     {
 
-        ID3DBlob* blob = (ID3DBlob*)deviceInstance.GetAndValidateItem(shaderHandles[i].shader, D12SHADERBLOB);
+        ID3DBlob* blob = (ID3DBlob*)deviceInstance.GetAndValidateItem(handles[i].shader, D12SHADERBLOB);
 
         SIZE_T bcLen = blob->GetBufferSize();
         void* shaderData = blob->GetBufferPointer();
         switch (handles[i].type)
         {
         case VERTEX:
-            desc.VS.BytecodeLength = bcLen;
-            desc.VS.pShaderBytecode = shaderData;
+            createInfo.desc.VS.BytecodeLength = bcLen;
+            createInfo.desc.VS.pShaderBytecode = shaderData;
             break;
         case PIXEL:
-            desc.PS.BytecodeLength = bcLen;
-            desc.PS.pShaderBytecode = shaderData;
+            createInfo.desc.PS.BytecodeLength = bcLen;
+            createInfo.desc.PS.pShaderBytecode = shaderData;
             break;
         }
     }
@@ -1052,55 +1040,33 @@ ID3D12PipelineState* CreatePipelineStateObject(ID3D12Device2* device, ID3D12Root
         attributeCounter += attributeCount;
     }
 
-    desc.InputLayout = { attributeDesc, totalAttributeCount };
+    createInfo.SetInputLayout(attributeDesc, totalAttributeCount, ConvertPrimitiveTypeToD3D12TopologyType(stateInfo->primType));
 
-    desc.PrimitiveTopologyType = ConvertPrimitiveTypeToD3D12TopologyType(stateInfo->primType);
+    createInfo.SetNumRenderTargets(1);
 
-    desc.NumRenderTargets = 1;
-    desc.RTVFormats[0] = ConvertImageFormatToDXGIFormat(stateInfo->colorFormat);
+    createInfo.SetSlotRenderTarget(0, ConvertImageFormatToDXGIFormat(stateInfo->colorFormat));
 
-    desc.DSVFormat = ConvertImageFormatToDXGIFormat(stateInfo->depthFormat);
+    createInfo.SetDepthFormat(ConvertImageFormatToDXGIFormat(stateInfo->depthFormat));
 
-    desc.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
-    desc.RasterizerState.CullMode = ConvertCullModeToD3D12CullMode(stateInfo->cullMode);
-    desc.RasterizerState.FrontCounterClockwise = (stateInfo->windingOrder == TriangleWinding::CCW ? TRUE : FALSE);
+    createInfo.SetRasterizerState(ConvertCullModeToD3D12CullMode(stateInfo->cullMode), (stateInfo->windingOrder == TriangleWinding::CCW ? TRUE : FALSE));
 
-    desc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
+    createInfo.SetBlendState();
 
-    desc.DepthStencilState = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
-    desc.DepthStencilState.DepthEnable = stateInfo->depthEnable;
-    desc.DepthStencilState.DepthWriteMask = (stateInfo->depthWrite ? D3D12_DEPTH_WRITE_MASK_ALL : D3D12_DEPTH_WRITE_MASK_ZERO);
-    desc.DepthStencilState.DepthFunc = ConvertRasterizerTestToD3D12CompareFunc(stateInfo->depthTest);
-    desc.DepthStencilState.StencilEnable = stateInfo->StencilEnable;
-
-    desc.DepthStencilState.BackFace = ConvertFaceStencilDataToD3D12StencilDesc(stateInfo->backFace);
-    desc.DepthStencilState.FrontFace = ConvertFaceStencilDataToD3D12StencilDesc(stateInfo->frontFace);
-
-
+    createInfo.SetSampleDesc(UINT_MAX, 1, 0);
+  
     if (stateInfo->frontFace.compareMask != stateInfo->backFace.compareMask || stateInfo->frontFace.writeMask != stateInfo->backFace.writeMask)
     {
         //handle unaligned 
     }
 
-    desc.DepthStencilState.StencilReadMask = stateInfo->frontFace.compareMask;
-    desc.DepthStencilState.StencilWriteMask = stateInfo->frontFace.writeMask;
+    D3D12_DEPTH_STENCILOP_DESC BackFace = ConvertFaceStencilDataToD3D12StencilDesc(stateInfo->backFace);
+    D3D12_DEPTH_STENCILOP_DESC FrontFace = ConvertFaceStencilDataToD3D12StencilDesc(stateInfo->frontFace);
 
+    createInfo.SetDepthStencilState(stateInfo->depthEnable, stateInfo->StencilEnable, ConvertRasterizerTestToD3D12CompareFunc(stateInfo->depthTest),
+        (stateInfo->depthWrite ? D3D12_DEPTH_WRITE_MASK_ALL : D3D12_DEPTH_WRITE_MASK_ZERO), &FrontFace, &BackFace, stateInfo->frontFace.compareMask, stateInfo->frontFace.writeMask);
 
-    desc.SampleMask = UINT_MAX;
-    desc.SampleDesc.Count = 1;
-    desc.SampleDesc.Quality = 0;
-
-    hr = device->CreateGraphicsPipelineState(
-        &desc,
-        IID_PPV_ARGS(&pipelineState)
-    );
-
-    if (FAILED(hr))
-    {
-        printf("Failed to create PSO\n");
-    }
-
-    return pipelineState;
+   
+    return deviceInstance.CreatePipelineStateObject(rootSignature, &createInfo);
 }
 
 
@@ -1159,9 +1125,9 @@ int Render()
     ID3D12DescriptorHeap* dsvDescriptor = (ID3D12DescriptorHeap*)deviceInstance.GetAndValidateItem(globalDSVDescriptorHeap, D12DESCRIPTORHEAP);
     ID3D12DescriptorHeap* rsvDescriptor = (ID3D12DescriptorHeap*)deviceInstance.GetAndValidateItem(globalRTVDescriptorHeap, D12DESCRIPTORHEAP);
 
-    CD3DX12_CPU_DESCRIPTOR_HANDLE dsvHandle(dsvDescriptor->GetCPUDescriptorHandleForHeapStart(), currentFrame, globalDSVDescriptorSize);
+    DX12CPUDescriptorHandle dsvHandle(dsvDescriptor->GetCPUDescriptorHandleForHeapStart(), currentFrame, globalDSVDescriptorSize);
 
-    CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(rsvDescriptor->GetCPUDescriptorHandleForHeapStart(), currentFrame, globalRTVDescriptorSize);
+    DX12CPUDescriptorHandle rtvHandle(rsvDescriptor->GetCPUDescriptorHandleForHeapStart(), currentFrame, globalRTVDescriptorSize);
 
     
     {
@@ -1247,13 +1213,10 @@ int Render()
         gCommandBuffer->SetPipelineState(pipelineState);
         gCommandBuffer->IASetPrimitiveTopology(triangles[i].topology);
 
-
-
-
         for (int j = 0; j < triangles[i].descriptorTableCount; j++)
         {
             int heapindex = triangles[i].descriptorHeapSelection[j];
-            CD3DX12_GPU_DESCRIPTOR_HANDLE handle = CD3DX12_GPU_DESCRIPTOR_HANDLE(heaps[heapindex]->GetGPUDescriptorHandleForHeapStart(), triangles[i].descriptorHeapPointer[j] + (currentFrame * triangles[i].resourceCount[j]), heapSizes[heapindex]);
+            DX12GPUDescriptorHandle handle = DX12GPUDescriptorHandle(heaps[heapindex]->GetGPUDescriptorHandleForHeapStart(), triangles[i].descriptorHeapPointer[j] + (currentFrame * triangles[i].resourceCount[j]), heapSizes[heapindex]);
             gCommandBuffer->SetGraphicsRootDescriptorTable(j, handle);
         }
 
@@ -1472,8 +1435,6 @@ EntryHandle CreateRootSignatureFromShaderGraph(ShaderGraph* graph)
 
     UINT samplerCount = 0;
 
-    
-  
     for (int i = 0; i < graph->resourceCount; i++)
     {
         ShaderResource* resource = (ShaderResource*)graph->GetResource(i);
@@ -1505,11 +1466,15 @@ EntryHandle CreateRootSignatureFromShaderGraph(ShaderGraph* graph)
 
     UINT* rangeCount = (UINT*)AllocFromTemp(sizeof(UINT) * numRootParameters, 4);
     memset(rangeCount, 0, sizeof(UINT) * numRootParameters);
-    CD3DX12_DESCRIPTOR_RANGE* ranges = (CD3DX12_DESCRIPTOR_RANGE*)AllocFromTemp(sizeof(CD3DX12_DESCRIPTOR_RANGE) * numOfRanges, 4);
+    
+    DX12DescriptorTableRanges ranges{};
+
+    ranges.numOfRanges = numOfRanges;
+    ranges.ranges = (D3D12_DESCRIPTOR_RANGE*)AllocFromTemp(sizeof(D3D12_DESCRIPTOR_RANGE) * numOfRanges, 4);
+
     ShaderStageType* visibility = (ShaderStageType*)AllocFromTemp(sizeof(ShaderStageType) * numRootParameters, 4);
 
-    UINT samplerIndex = 0, srvIndex = 0, cbvIndex = 0, samplerRangeIndex = numOfRanges - 1, samplerRangeParameterIndex = numOfRanges-samplerCount;
-    int rangeParameterIndex = 0;
+    UINT samplerIndex = 0, srvIndex = 0, cbvIndex = 0, samplerRangeParameterIndex = numOfRanges-samplerCount;
 
 
     for (int i = 0; i < graph->resourceCount; i++)
@@ -1520,39 +1485,28 @@ EntryHandle CreateRootSignatureFromShaderGraph(ShaderGraph* graph)
         {
         case ShaderResourceType::CONSTANT_BUFFER:
         {
-            CD3DX12_DESCRIPTOR_RANGE* range = &ranges[rangeParameterIndex++];
-            range->Init(D3D12_DESCRIPTOR_RANGE_TYPE_CBV, 1, cbvIndex++);
+            ranges.AppendCBVRange(1, cbvIndex++, 0);
             visibility[resource->set] |= resource->stages;
             rangeCount[resource->set] += 1;
             break;
         }
         case ShaderResourceType::IMAGE2D:
         {
-            CD3DX12_DESCRIPTOR_RANGE* range = &ranges[rangeParameterIndex++];
-            range->Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, srvIndex++);
-
-       
+            ranges.AppendSRVRange(1, srvIndex++, 0);
             rangeCount[resource->set] += 1;
-       
             visibility[resource->set] |= resource->stages;
-           
             break;
-
         }
-
         case ShaderResourceType::SAMPLERSTATE:
         {
-            CD3DX12_DESCRIPTOR_RANGE* range = &ranges[samplerRangeParameterIndex++];
-            range->Init(D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER, 1, samplerIndex++);
+            ranges.CreateSamplerRange(samplerRangeParameterIndex++, 1, samplerIndex++, 0);
             visibility[numRootParameters - 1] |= resource->stages;
             rangeCount[numRootParameters - 1] += 1;
             break;
         }
         case ShaderResourceType::UNIFORM_BUFFER:
         {
-            CD3DX12_DESCRIPTOR_RANGE* range = &ranges[rangeParameterIndex++];
-            range->Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, srvIndex++);
-
+            ranges.AppendSRVRange(1, srvIndex++, 0);
             rangeCount[resource->set] += 1;
             visibility[resource->set] |= resource->stages;
             break;
@@ -1560,10 +1514,13 @@ EntryHandle CreateRootSignatureFromShaderGraph(ShaderGraph* graph)
         }
     }
 
-    CD3DX12_ROOT_PARAMETER* rootParameters = (CD3DX12_ROOT_PARAMETER*)AllocFromTemp(sizeof(CD3DX12_ROOT_PARAMETER) * numRootParameters, 4);
+    DX12RootSignatureCreate createInfo{};
+
+    createInfo.numOfRootParameters = numRootParameters;
+
+    createInfo.rootParameters = (D3D12_ROOT_PARAMETER*)AllocFromTemp(sizeof(D3D12_ROOT_PARAMETER) * numRootParameters, 4);
 
     UINT rootParamIndex = 0, rangeIterIndex = 0;
-
 
     for (int i = 0; i < graph->resourceSetCount; i++)
     {
@@ -1589,7 +1546,7 @@ EntryHandle CreateRootSignatureFromShaderGraph(ShaderGraph* graph)
             }
         }
 
-        rootParameters[rootParamIndex].InitAsDescriptorTable(rangeCount[i], ranges + rangeIterIndex, visible);
+        createInfo.CreateDescriptorTable(rootParamIndex, &ranges, rangeIterIndex, rangeCount[i], visible);
 
         rootParamIndex++;
 
@@ -1618,10 +1575,10 @@ EntryHandle CreateRootSignatureFromShaderGraph(ShaderGraph* graph)
             }
         }
 
-        rootParameters[numRootParameters - 1].InitAsDescriptorTable(samplerCount, ranges + rangeIterIndex, visible);
+        createInfo.CreateDescriptorTable(numRootParameters - 1, &ranges, rangeIterIndex, samplerCount, visible);
     }
    
-    EntryHandle rootSignature = deviceInstance.CreateRootSignature(rootParameters, numRootParameters, D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
+    EntryHandle rootSignature = deviceInstance.CreateRootSignature(&createInfo, D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
 
     return rootSignature;
 }

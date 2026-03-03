@@ -4,7 +4,6 @@
 #include <dxgi1_6.h>
 #include <d3dcompiler.h>
 #include <DirectXMath.h>
-#include "d3dx12.h"
 #include <dxgidebug.h>
 
 
@@ -107,6 +106,302 @@ struct PipelineObject
 
 };
 
+/*
+
+ D3D12_ROOT_PARAMETER_TYPE
+    {
+        D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE	= 0,
+        D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS	= ( D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE + 1 ) ,
+        D3D12_ROOT_PARAMETER_TYPE_CBV	= ( D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS + 1 ) ,
+        D3D12_ROOT_PARAMETER_TYPE_SRV	= ( D3D12_ROOT_PARAMETER_TYPE_CBV + 1 ) ,
+        D3D12_ROOT_PARAMETER_TYPE_UAV	= ( D3D12_ROOT_PARAMETER_TYPE_SRV + 1 )
+    } 	D3D12_ROOT_PARAMETER_TYPE;
+
+    D3D12_DESCRIPTOR_RANGE_TYPE
+    {
+        D3D12_DESCRIPTOR_RANGE_TYPE_SRV	= 0,
+        D3D12_DESCRIPTOR_RANGE_TYPE_UAV	= ( D3D12_DESCRIPTOR_RANGE_TYPE_SRV + 1 ) ,
+        D3D12_DESCRIPTOR_RANGE_TYPE_CBV	= ( D3D12_DESCRIPTOR_RANGE_TYPE_UAV + 1 ) ,
+        D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER	= ( D3D12_DESCRIPTOR_RANGE_TYPE_CBV + 1 )
+    } 	D3D12_DESCRIPTOR_RANGE_TYPE;
+
+    D3D12_DESCRIPTOR_RANGE
+    {
+    D3D12_DESCRIPTOR_RANGE_TYPE RangeType;
+    UINT NumDescriptors;
+    UINT BaseShaderRegister;
+    UINT RegisterSpace;
+    UINT OffsetInDescriptorsFromTableStart;
+    } 	D3D12_DESCRIPTOR_RANGE;
+
+
+
+    D3D12_ROOT_CONSTANTS
+    {
+    UINT ShaderRegister;
+    UINT RegisterSpace;
+    UINT Num32BitValues;
+    } 	D3D12_ROOT_CONSTANTS;
+
+    D3D12_ROOT_DESCRIPTOR
+    {
+    UINT ShaderRegister;
+    UINT RegisterSpace;
+    } 	D3D12_ROOT_DESCRIPTOR;
+
+*/
+
+
+struct DX12PipelineStateObjectCreate
+{
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC desc{};
+
+
+    void SetDepthStencilState(BOOL depthEnable,
+        BOOL stencilEnable, D3D12_COMPARISON_FUNC depthComapreFunc, D3D12_DEPTH_WRITE_MASK depthWriteMask,
+        D3D12_DEPTH_STENCILOP_DESC* frontFaceStencil, D3D12_DEPTH_STENCILOP_DESC* backFaceStencil,
+        UINT sReadMask, UINT8 sWriteMask
+    )
+    {
+      
+        desc.DepthStencilState.DepthEnable = depthEnable;
+        desc.DepthStencilState.DepthWriteMask = depthWriteMask;
+        desc.DepthStencilState.DepthFunc = depthComapreFunc;
+        desc.DepthStencilState.StencilEnable = stencilEnable;
+
+        desc.DepthStencilState.BackFace = *backFaceStencil;
+        desc.DepthStencilState.FrontFace = *frontFaceStencil;
+        desc.DepthStencilState.StencilReadMask = sReadMask;
+        desc.DepthStencilState.StencilWriteMask = sWriteMask;
+    }
+
+    void SetRasterizerState(D3D12_CULL_MODE cullMode, BOOL fcc)
+    {
+        desc.RasterizerState.CullMode = cullMode;
+        desc.RasterizerState.FrontCounterClockwise = fcc;
+        desc.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
+        desc.RasterizerState.DepthBias = D3D12_DEFAULT_DEPTH_BIAS;
+        desc.RasterizerState.DepthBiasClamp = D3D12_DEFAULT_DEPTH_BIAS_CLAMP;
+        desc.RasterizerState.SlopeScaledDepthBias = D3D12_DEFAULT_SLOPE_SCALED_DEPTH_BIAS;
+        desc.RasterizerState.DepthClipEnable = TRUE;
+        desc.RasterizerState.MultisampleEnable = FALSE;
+        desc.RasterizerState.AntialiasedLineEnable = FALSE;
+        desc.RasterizerState.ForcedSampleCount = 0;
+        desc.RasterizerState.ConservativeRaster = D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF;
+    }
+
+    void SetInputLayout(D3D12_INPUT_ELEMENT_DESC* inputDescs, UINT numDesc, D3D12_PRIMITIVE_TOPOLOGY_TYPE primType)
+    {
+        desc.InputLayout = { inputDescs, numDesc };
+        desc.PrimitiveTopologyType = primType;
+    }
+
+    void SetNumRenderTargets(UINT numRenderTargets)
+    {
+        desc.NumRenderTargets = numRenderTargets;
+    }
+
+    void SetSlotRenderTarget(UINT slotIndex, DXGI_FORMAT format)
+    {
+        desc.RTVFormats[slotIndex] = format;
+    }
+
+    void SetDepthFormat(DXGI_FORMAT dsvFormat)
+    {
+        desc.DSVFormat = dsvFormat;
+    }
+
+    void SetSampleDesc(UINT sampleMask, UINT sampleCount, UINT sampleQuality)
+    {
+        desc.SampleMask = UINT_MAX;
+        desc.SampleDesc.Count = sampleCount;
+        desc.SampleDesc.Quality = sampleQuality;
+    }
+
+    void SetBlendState()
+    {
+        desc.BlendState.AlphaToCoverageEnable = FALSE;
+        desc.BlendState.IndependentBlendEnable = FALSE;
+
+        const D3D12_RENDER_TARGET_BLEND_DESC defaultRenderTargetBlendDesc =
+        {
+            FALSE,FALSE,
+            D3D12_BLEND_ONE, D3D12_BLEND_ZERO, D3D12_BLEND_OP_ADD,
+            D3D12_BLEND_ONE, D3D12_BLEND_ZERO, D3D12_BLEND_OP_ADD,
+            D3D12_LOGIC_OP_NOOP,
+            D3D12_COLOR_WRITE_ENABLE_ALL,
+        };
+
+        for (UINT i = 0; i < D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT; ++i)
+            desc.BlendState.RenderTarget[i] = defaultRenderTargetBlendDesc;
+    }
+
+    void SetRootSignature(ID3D12RootSignature* rootSign)
+    {
+        desc.pRootSignature = rootSign;
+    }
+
+};
+
+struct DX12DescriptorTableRanges
+{
+    D3D12_DESCRIPTOR_RANGE* ranges = nullptr;
+    UINT numOfRanges = 0;
+    UINT rangeCounter = 0;
+
+    void CreateRange(UINT rangeIndex, D3D12_DESCRIPTOR_RANGE_TYPE rangeType, UINT numDescriptors, UINT baseShaderRegister, UINT registerSpace, UINT offsetInDescriptorsTableStart)
+    {
+        D3D12_DESCRIPTOR_RANGE* range = &ranges[rangeIndex];
+        range->RangeType = rangeType;
+        range->NumDescriptors = numDescriptors;
+        range->BaseShaderRegister = baseShaderRegister;
+        range->RegisterSpace = registerSpace;
+        range->OffsetInDescriptorsFromTableStart = offsetInDescriptorsTableStart;
+    }
+
+    void AppendSRVRange(UINT numDescriptors, UINT baseShaderRegister, UINT registerSpaceLocation)
+    {
+        CreateRange(rangeCounter++, D3D12_DESCRIPTOR_RANGE_TYPE_SRV, numDescriptors, baseShaderRegister, registerSpaceLocation, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND);
+    }
+
+    void AppendUAVRange(UINT numDescriptors, UINT baseShaderRegister, UINT registerSpaceLocation)
+    {
+        CreateRange(rangeCounter++, D3D12_DESCRIPTOR_RANGE_TYPE_UAV, numDescriptors, baseShaderRegister, registerSpaceLocation, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND);
+    }
+
+    void AppendCBVRange(UINT numDescriptors, UINT baseShaderRegister, UINT registerSpaceLocation)
+    {
+        CreateRange(rangeCounter++, D3D12_DESCRIPTOR_RANGE_TYPE_CBV, numDescriptors, baseShaderRegister, registerSpaceLocation, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND);
+    }
+
+    void AppendSamplerRange(UINT numDescriptors, UINT baseShaderRegister, UINT registerSpaceLocation)
+    {
+        CreateRange(rangeCounter++, D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER, numDescriptors, baseShaderRegister, registerSpaceLocation, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND);
+    }
+
+    void CreateSamplerRange(UINT rangeIndex, UINT numDescriptors, UINT baseShaderRegister, UINT registerSpaceLocation)
+    {
+        CreateRange(rangeIndex, D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER, numDescriptors, baseShaderRegister, registerSpaceLocation, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND);
+    }
+};
+
+struct DX12RootSignatureCreate
+{
+    D3D12_ROOT_PARAMETER* rootParameters;
+    UINT numOfRootParameters;
+
+    void CreateDescriptorTable(UINT rootParamIndex, DX12DescriptorTableRanges* rangeStruct, UINT offsetInRange, UINT numOfRanges, D3D12_SHADER_VISIBILITY visibility)
+    {
+        rootParameters[rootParamIndex].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        rootParameters[rootParamIndex].ShaderVisibility = visibility;
+        rootParameters[rootParamIndex].DescriptorTable.NumDescriptorRanges = numOfRanges;
+        rootParameters[rootParamIndex].DescriptorTable.pDescriptorRanges = rangeStruct->ranges + offsetInRange;
+    }
+
+    void CreateConstants(UINT rootParamIndex, UINT shaderRegister, UINT registerSpaceLocation, UINT num32bitconstants, D3D12_SHADER_VISIBILITY visibility)
+    {
+        rootParameters[rootParamIndex].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+        rootParameters[rootParamIndex].ShaderVisibility = visibility;
+        rootParameters[rootParamIndex].Constants.Num32BitValues = num32bitconstants;
+        rootParameters[rootParamIndex].Constants.RegisterSpace= registerSpaceLocation;
+        rootParameters[rootParamIndex].Constants.ShaderRegister = shaderRegister;
+    }
+
+    void CreateDescriptor(UINT rootParamIndex, D3D12_ROOT_PARAMETER_TYPE paramType, UINT shaderRegister, UINT registerSpaceLocation, D3D12_SHADER_VISIBILITY visibility)
+    {
+        rootParameters[rootParamIndex].ParameterType = paramType;
+        rootParameters[rootParamIndex].ShaderVisibility = visibility;
+        rootParameters[rootParamIndex].Descriptor.RegisterSpace= registerSpaceLocation;
+        rootParameters[rootParamIndex].Descriptor.ShaderRegister = shaderRegister;
+    }
+
+    void CreateUAVDescriptor(UINT rootParamIndex, UINT shaderRegister, UINT registerSpaceLocation, D3D12_SHADER_VISIBILITY visibility)
+    {
+        CreateDescriptor(rootParamIndex, D3D12_ROOT_PARAMETER_TYPE_UAV, shaderRegister, registerSpaceLocation, visibility);
+    }
+
+    void CreateCBVDescriptor(UINT rootParamIndex, UINT shaderRegister, UINT registerSpaceLocation, D3D12_SHADER_VISIBILITY visibility)
+    {
+        CreateDescriptor(rootParamIndex, D3D12_ROOT_PARAMETER_TYPE_CBV, shaderRegister, registerSpaceLocation, visibility);
+    }
+
+    void CreateSRVDescriptor(UINT rootParamIndex, UINT shaderRegister, UINT registerSpaceLocation, D3D12_SHADER_VISIBILITY visibility)
+    {
+        CreateDescriptor(rootParamIndex, D3D12_ROOT_PARAMETER_TYPE_SRV, shaderRegister, registerSpaceLocation, visibility);
+    }
+};
+
+
+struct DX12CPUDescriptorHandle
+{
+    D3D12_CPU_DESCRIPTOR_HANDLE handle;
+    D3D12_CPU_DESCRIPTOR_HANDLE current;
+
+    DX12CPUDescriptorHandle(D3D12_CPU_DESCRIPTOR_HANDLE start)
+        :
+        handle(start), current(start)
+    {
+
+    }
+
+    DX12CPUDescriptorHandle(D3D12_CPU_DESCRIPTOR_HANDLE start, UINT startDescriptor, UINT descriptorStride)
+        :
+        handle(start), current(start)
+    {
+        current.ptr = (current.ptr + ((INT64)startDescriptor * (INT64)descriptorStride));
+    }
+
+
+    operator D3D12_CPU_DESCRIPTOR_HANDLE() const { return current; }
+
+    void Advance(UINT numDescriptors, UINT descriptorStride)
+    {
+        current.ptr = (current.ptr + ((INT64)numDescriptors * (INT64)descriptorStride));
+    }
+
+    void Set(UINT numDescriptors, UINT descriptorStride)
+    {
+        current.ptr = (handle.ptr + ((SIZE_T)numDescriptors * (SIZE_T)descriptorStride));
+    }
+
+};
+
+
+struct DX12GPUDescriptorHandle
+{
+    D3D12_GPU_DESCRIPTOR_HANDLE handle;
+    D3D12_GPU_DESCRIPTOR_HANDLE current;
+
+    DX12GPUDescriptorHandle(D3D12_GPU_DESCRIPTOR_HANDLE start)
+        :
+        handle(start), current(start)
+    {
+
+    }
+
+    DX12GPUDescriptorHandle(D3D12_GPU_DESCRIPTOR_HANDLE start, UINT startDescriptor, UINT descriptorStride)
+        :
+        handle(start), current(start)
+    {
+        current.ptr = (current.ptr + ((INT64)startDescriptor * (INT64)descriptorStride));
+    }
+
+
+    operator D3D12_GPU_DESCRIPTOR_HANDLE() const { return current; }
+
+    void Advance(UINT numDescriptors, UINT descriptorStride)
+    {
+        current.ptr = (current.ptr + ((INT64)numDescriptors * (INT64)descriptorStride));
+    }
+
+    void Set(UINT numDescriptors, UINT descriptorStride)
+    {
+        current.ptr = (handle.ptr + ((SIZE_T)numDescriptors * (SIZE_T)descriptorStride));
+    }
+
+};
+
+
 struct DX12Device
 {
 
@@ -196,7 +491,7 @@ struct DX12Device
 
     int CreateRenderTargetView(EntryHandle swapChainIdx, EntryHandle descriptorHeapIdx, EntryHandle* outBuffers, UINT imageCount);
 
-    EntryHandle CreateRootSignature(CD3DX12_ROOT_PARAMETER* rootParameters, UINT parameterCount, D3D12_ROOT_SIGNATURE_FLAGS flags);
+    EntryHandle CreateRootSignature(DX12RootSignatureCreate* createInfo, D3D12_ROOT_SIGNATURE_FLAGS flags);
 
     void CreateSRVDescriptorHandle(EntryHandle bufferPoolHandle, UINT offset, UINT numCount, UINT size, DXGI_FORMAT format, DescriptorHeapManager* heap, D3D12_SRV_DIMENSION dimension);
 
@@ -245,5 +540,22 @@ struct DX12Device
 
 
     void ReleaseAllDriverCOMHandles();
+
+
+    EntryHandle CreatePipelineStateObject(EntryHandle _rootSignature, DX12PipelineStateObjectCreate* createInfo)
+    {
+        ID3D12RootSignature* rootSignH = (ID3D12RootSignature*)GetAndValidateItem(_rootSignature, D12ROOTSIGNATURE);
+
+        createInfo->SetRootSignature(rootSignH);
+
+        ID3D12PipelineState* pipelineState;
+
+        HRESULT hr = deviceHandle->CreateGraphicsPipelineState(
+            &createInfo->desc,
+            IID_PPV_ARGS(&pipelineState)
+        );
+
+        return AllocTypeForEntry(pipelineState, D12PIPELINESTATE);
+    }
 };
 
