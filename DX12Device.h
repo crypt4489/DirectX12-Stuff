@@ -459,7 +459,7 @@ struct DX12Device
 
     EntryHandle CreateCommittedImageResource(UINT width, UINT height, UINT depth, UINT mips, D3D12_RESOURCE_FLAGS flags, DXGI_FORMAT format, D3D12_RESOURCE_DIMENSION dimension);
 
-    void CreateCBVDescriptorHandle(EntryHandle bufferPoolHandle, UINT offset, UINT size, DescriptorHeapManager* heap);
+    void CreateCBVDescriptorHandle(EntryHandle bufferPoolHandle, UINT offset, UINT size, DescriptorHeapManager* heap, UINT heapIndex);
 
     EntryHandle CreateDSVRSVMemoryPool(size_t sizeOfPool, size_t alignment, bool msaa);
 
@@ -479,9 +479,9 @@ struct DX12Device
 
     ID3D12Heap* CreateDX12Heap(SIZE_T size, SIZE_T alignment, D3D12_HEAP_FLAGS heapFlags, D3D12_HEAP_TYPE heapType);
 
-    void CreateImageSampler(DescriptorHeapManager* samplerDescriptorHeap);
+    void CreateImageSampler(DescriptorHeapManager* samplerDescriptorHeap, UINT heapIndex);
 
-    void CreateImageSRVDescriptorHandle(EntryHandle bufferPoolHandle, UINT mipsLevels, DXGI_FORMAT format, DescriptorHeapManager* heap, D3D12_SRV_DIMENSION dimension);
+    void CreateImageSRVDescriptorHandle(EntryHandle bufferPoolHandle, UINT mipsLevels, DXGI_FORMAT format, DescriptorHeapManager* heap, UINT heapIndex, D3D12_SRV_DIMENSION dimension);
 
     EntryHandle CreateImageMemoryPool(size_t sizeOfPool, size_t alignment, D3D12_HEAP_FLAGS heapFlags, D3D12_HEAP_TYPE heapType);
 
@@ -493,7 +493,7 @@ struct DX12Device
 
     EntryHandle CreateRootSignature(DX12RootSignatureCreate* createInfo, D3D12_ROOT_SIGNATURE_FLAGS flags);
 
-    void CreateSRVDescriptorHandle(EntryHandle bufferPoolHandle, UINT offset, UINT numCount, UINT size, DXGI_FORMAT format, DescriptorHeapManager* heap, D3D12_SRV_DIMENSION dimension);
+    void CreateSRVDescriptorHandle(EntryHandle bufferPoolHandle, UINT offset, UINT numCount, UINT size, DXGI_FORMAT format, DescriptorHeapManager* heap, UINT heapIndex, D3D12_SRV_DIMENSION dimension);
 
     EntryHandle CreateShaderBlob(const char* shaderfile);
 
@@ -502,12 +502,14 @@ struct DX12Device
 
     EntryHandle CreateTextureMemoryPool(size_t sizeOfPool, size_t alignment);
 
-    void CreateUAVDescriptorHandle(EntryHandle bufferPoolHandle, UINT offset, UINT numCount, UINT size, DXGI_FORMAT format, DescriptorHeapManager* heap);
+    void CreateUAVDescriptorHandle(EntryHandle bufferPoolHandle, UINT offset, UINT numCount, UINT size, DXGI_FORMAT format, DescriptorHeapManager* heap, UINT heapIndex);
 
     EntryHandle CreateDeviceBuffer(UINT size, DXGI_FORMAT format, D3D12_RESOURCE_FLAGS flags);
 
     EntryHandle CreateHostBuffer(UINT size, DXGI_FORMAT format, D3D12_RESOURCE_FLAGS flags);
 
+
+    void CopyDescriptors(UINT numDescriptors, UINT startInSrc, UINT startInDst, EntryHandle srcHeap, EntryHandle destHeap, UINT srcHeapSize, UINT dstHeapSize, D3D12_DESCRIPTOR_HEAP_TYPE type);
 
     void ExecuteCommandListsOnQueue(EntryHandle queueIndex, ID3D12CommandList** lists, UINT numOfLists);
 
@@ -556,6 +558,14 @@ struct DX12Device
         );
 
         return AllocTypeForEntry(pipelineState, D12PIPELINESTATE);
+    }
+
+
+    DX12CPUDescriptorHandle GetCPUHandleFromDescriptorManager(DescriptorHeapManager* heapManager)
+    {
+        ID3D12DescriptorHeap* heap = (ID3D12DescriptorHeap*)GetAndValidateItem(heapManager->descriptorHeap, D12DESCRIPTORHEAP);
+
+        return DX12CPUDescriptorHandle(heap->GetCPUDescriptorHandleForHeapStart());
     }
 };
 

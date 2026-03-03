@@ -815,6 +815,19 @@ size_t DX12Device::AllocFromDriverMemoryBuffer(EntryHandle bufferPoolIndex, size
 }
 
 
+void DX12Device::CopyDescriptors(UINT numDescriptors, UINT startInSrc, UINT startInDst, EntryHandle srcHeap, EntryHandle destHeap, UINT srcHeapSize, UINT dstHeapSize, D3D12_DESCRIPTOR_HEAP_TYPE type)
+{
+    ID3D12DescriptorHeap* srcDescriptor = (ID3D12DescriptorHeap*)GetAndValidateItem(srcHeap, D12DESCRIPTORHEAP);
+
+    DX12CPUDescriptorHandle srcHandle(srcDescriptor->GetCPUDescriptorHandleForHeapStart(), startInSrc, srcHeapSize);
+
+    ID3D12DescriptorHeap* dstDescriptor = (ID3D12DescriptorHeap*)GetAndValidateItem(destHeap, D12DESCRIPTORHEAP);
+
+    DX12CPUDescriptorHandle dstHandle(dstDescriptor->GetCPUDescriptorHandleForHeapStart(), startInDst, dstHeapSize);
+
+    deviceHandle->CopyDescriptorsSimple(numDescriptors, dstHandle, srcHandle, type);
+}
+
 void DX12Device::ExecuteCommandListsOnQueue(EntryHandle queueIndex, ID3D12CommandList** lists, UINT numOfLists)
 {
     ID3D12CommandQueue* lQueueHandle = (ID3D12CommandQueue*)GetAndValidateItem(queueIndex, D12QUEUE);
@@ -1106,11 +1119,11 @@ EntryHandle DX12Device::CreateRootSignature(DX12RootSignatureCreate* createInfo,
 }
 
 
-void DX12Device::CreateImageSampler(DescriptorHeapManager* samplerDescriptorHeap)
+void DX12Device::CreateImageSampler(DescriptorHeapManager* samplerDescriptorHeap, UINT heapIndex)
 {
     ID3D12DescriptorHeap* sampDescriptor = (ID3D12DescriptorHeap*)GetAndValidateItem(samplerDescriptorHeap->descriptorHeap, D12DESCRIPTORHEAP);
 
-    DX12CPUDescriptorHandle samplerHandle(sampDescriptor->GetCPUDescriptorHandleForHeapStart(), samplerDescriptorHeap->descriptorHeapHandlePointer, samplerDescriptorHeap->descriptorHeapHandleSize);
+    DX12CPUDescriptorHandle samplerHandle(sampDescriptor->GetCPUDescriptorHandleForHeapStart(), heapIndex, samplerDescriptorHeap->descriptorHeapHandleSize);
 
     D3D12_SAMPLER_DESC samplerDesc = {};
     samplerDesc.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
@@ -1128,18 +1141,16 @@ void DX12Device::CreateImageSampler(DescriptorHeapManager* samplerDescriptorHeap
     samplerDesc.MaxLOD = D3D12_FLOAT32_MAX;
 
     deviceHandle->CreateSampler(&samplerDesc, samplerHandle);
-
-    samplerDescriptorHeap->descriptorHeapHandlePointer++;
 }
 
 
-void DX12Device::CreateImageSRVDescriptorHandle(EntryHandle bufferPoolHandle, UINT mipsLevels, DXGI_FORMAT format, DescriptorHeapManager* heap, D3D12_SRV_DIMENSION dimension)
+void DX12Device::CreateImageSRVDescriptorHandle(EntryHandle bufferPoolHandle, UINT mipsLevels, DXGI_FORMAT format, DescriptorHeapManager* heap, UINT heapIndex, D3D12_SRV_DIMENSION dimension)
 {
     ID3D12DescriptorHeap* srvDescriptor = (ID3D12DescriptorHeap*)GetAndValidateItem(heap->descriptorHeap, D12DESCRIPTORHEAP);
 
     ID3D12Resource* bufferHandle = (ID3D12Resource*)GetAndValidateItem(bufferPoolHandle, D12RESOURCEHANDLE);
 
-    DX12CPUDescriptorHandle srvHandle(srvDescriptor->GetCPUDescriptorHandleForHeapStart(), heap->descriptorHeapHandlePointer, heap->descriptorHeapHandleSize);
+    DX12CPUDescriptorHandle srvHandle(srvDescriptor->GetCPUDescriptorHandleForHeapStart(), heapIndex, heap->descriptorHeapHandleSize);
 
     D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
     srvDesc.ViewDimension = dimension;
@@ -1149,10 +1160,10 @@ void DX12Device::CreateImageSRVDescriptorHandle(EntryHandle bufferPoolHandle, UI
 
     deviceHandle->CreateShaderResourceView(bufferHandle, &srvDesc, srvHandle);
 
-    heap->descriptorHeapHandlePointer++;
+
 }
 
-void DX12Device::CreateSRVDescriptorHandle(EntryHandle bufferPoolHandle, UINT offset, UINT numCount, UINT size, DXGI_FORMAT format, DescriptorHeapManager* heap, D3D12_SRV_DIMENSION dimension)
+void DX12Device::CreateSRVDescriptorHandle(EntryHandle bufferPoolHandle, UINT offset, UINT numCount, UINT size, DXGI_FORMAT format, DescriptorHeapManager* heap, UINT heapIndex, D3D12_SRV_DIMENSION dimension)
 {
 
     UINT firstElement = offset / size;
@@ -1161,7 +1172,7 @@ void DX12Device::CreateSRVDescriptorHandle(EntryHandle bufferPoolHandle, UINT of
 
     ID3D12DescriptorHeap* srvDescriptor = (ID3D12DescriptorHeap*)GetAndValidateItem(heap->descriptorHeap, D12DESCRIPTORHEAP);
 
-    DX12CPUDescriptorHandle srvHandle(srvDescriptor->GetCPUDescriptorHandleForHeapStart(), heap->descriptorHeapHandlePointer, heap->descriptorHeapHandleSize);
+    DX12CPUDescriptorHandle srvHandle(srvDescriptor->GetCPUDescriptorHandleForHeapStart(), heapIndex, heap->descriptorHeapHandleSize);
 
     D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
     srvDesc.ViewDimension = dimension;
@@ -1174,11 +1185,9 @@ void DX12Device::CreateSRVDescriptorHandle(EntryHandle bufferPoolHandle, UINT of
 
     deviceHandle->CreateShaderResourceView(bufferHandle, &srvDesc, srvHandle);
 
-    heap->descriptorHeapHandlePointer++;
-
 }
 
-void DX12Device::CreateUAVDescriptorHandle(EntryHandle bufferPoolHandle, UINT offset, UINT numCount, UINT size, DXGI_FORMAT format, DescriptorHeapManager* heap)
+void DX12Device::CreateUAVDescriptorHandle(EntryHandle bufferPoolHandle, UINT offset, UINT numCount, UINT size, DXGI_FORMAT format, DescriptorHeapManager* heap, UINT heapIndex)
 {
 
     UINT firstElement = offset / size;
@@ -1187,7 +1196,7 @@ void DX12Device::CreateUAVDescriptorHandle(EntryHandle bufferPoolHandle, UINT of
 
     ID3D12DescriptorHeap* uavDescriptor = (ID3D12DescriptorHeap*)GetAndValidateItem(heap->descriptorHeap, D12DESCRIPTORHEAP);
 
-    DX12CPUDescriptorHandle uavHandle(uavDescriptor->GetCPUDescriptorHandleForHeapStart(), heap->descriptorHeapHandlePointer, heap->descriptorHeapHandleSize);
+    DX12CPUDescriptorHandle uavHandle(uavDescriptor->GetCPUDescriptorHandleForHeapStart(), heapIndex, heap->descriptorHeapHandleSize);
 
 
     D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
@@ -1202,15 +1211,13 @@ void DX12Device::CreateUAVDescriptorHandle(EntryHandle bufferPoolHandle, UINT of
 
     deviceHandle->CreateUnorderedAccessView(bufferHandle, nullptr, &uavDesc, uavHandle);
 
-    heap->descriptorHeapHandlePointer++;
-
 }
 
-void DX12Device::CreateCBVDescriptorHandle(EntryHandle bufferPoolHandle, UINT offset, UINT size, DescriptorHeapManager* heap)
+void DX12Device::CreateCBVDescriptorHandle(EntryHandle bufferPoolHandle, UINT offset, UINT size, DescriptorHeapManager* heap, UINT heapIndex)
 {
     ID3D12DescriptorHeap* cbvDescriptor = (ID3D12DescriptorHeap*)GetAndValidateItem(heap->descriptorHeap, D12DESCRIPTORHEAP);
 
-    DX12CPUDescriptorHandle cbvHandle(cbvDescriptor->GetCPUDescriptorHandleForHeapStart(), heap->descriptorHeapHandlePointer, heap->descriptorHeapHandleSize);
+    DX12CPUDescriptorHandle cbvHandle(cbvDescriptor->GetCPUDescriptorHandleForHeapStart(), heapIndex, heap->descriptorHeapHandleSize);
 
     ID3D12Resource* bufferHandle = GetResourceHandleForMemoryBuffer(bufferPoolHandle);
 
@@ -1220,9 +1227,6 @@ void DX12Device::CreateCBVDescriptorHandle(EntryHandle bufferPoolHandle, UINT of
     cbvDesc.SizeInBytes = (size + (255)) & ~255;
 
     deviceHandle->CreateConstantBufferView(&cbvDesc, cbvHandle);
-
-    heap->descriptorHeapHandlePointer++;
-
 }
 
 EntryHandle DX12Device::CreateDescriptorHeapManager(UINT maxDescriptorHandles, D3D12_DESCRIPTOR_HEAP_TYPE type, D3D12_DESCRIPTOR_HEAP_FLAGS flags)

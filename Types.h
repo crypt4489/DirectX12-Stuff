@@ -868,12 +868,12 @@ struct ShaderResourceBufferBarrier : public ShaderResourceBarrier
 
 struct ShaderResourceSampler : public ShaderResourceHeader
 {
-    size_t samplerHandle;
+    EntryHandle samplerHandle;
 };
 
 struct ShaderResourceImage : public ShaderResourceHeader
 {
-    size_t textureHandle;
+    EntryHandle textureHandle;
 };
 
 struct ShaderResourceSamplerBindless : public ShaderResourceHeader
@@ -918,6 +918,7 @@ constexpr std::array<int, 50> makeArray(int val) {
 }
 
 std::array<int, 50> srvDescriptorTablesStart = makeArray(-1);
+std::array<int, 50> srvDescriptorTablesCounts = makeArray(-1);
 
 void BindBufferToShaderResource(int descriptorSet, int allocationIndex, int bindingIndex, int offset)
 {
@@ -948,7 +949,7 @@ void BindImageResourceToShaderResource(int descriptorSet, size_t index, int bind
     header->textureHandle = index;
 }
 
-void BindSamplerResourceToShaderResource(int descriptorSet, size_t index, int bindingIndex)
+void BindSamplerResourceToShaderResource(int descriptorSet, EntryHandle index, int bindingIndex)
 {
     uintptr_t head = descriptorSets[descriptorSet];
     ShaderResourceSet* set = (ShaderResourceSet*)head;
@@ -962,7 +963,7 @@ void BindSamplerResourceToShaderResource(int descriptorSet, size_t index, int bi
     header->samplerHandle = index;
 }
 
-void BindSampledImageToShaderResource(int descriptorSet, size_t index, int bindingIndex)
+void BindSampledImageToShaderResource(int descriptorSet, EntryHandle index, int bindingIndex)
 {
     uintptr_t head = descriptorSets[descriptorSet];
     ShaderResourceSet* set = (ShaderResourceSet*)head;
