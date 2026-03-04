@@ -19,9 +19,6 @@ constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 3;
 bool g_UseWarp = false;
 bool g_IsInitialized = false;
 
-#define KiB 1024
-#define MiB 1024*1024
-
 #define TEMP_MEM_SIZE 64*MiB
 #define STORAGE_MEM_SIZE 128*MiB
 
@@ -538,20 +535,10 @@ struct ImageHandle
     EntryHandle imageViewHandle;
 };
 
-struct Allocation
-{
-    int copies;
-    size_t offset;
-    size_t alignment; 
-    size_t stridesize; //amount of memory taken up per copy
-    size_t requestedsize;
-    EntryHandle bufferHandle;
-    size_t totalDeviceAlloc;
-};
 
 static int allocationHandleIndex = 0;
 
-Allocation allocationHandle[50];
+RenderAllocation allocationHandle[50];
 
 void CreateTablesFromResourceSet(int* descriptorSets, int numDescriptorSet, PipelineObject* object);
 
@@ -603,46 +590,51 @@ static XMVECTOR BoxVerts[48] =
     XMVectorSet(1.0f, -1.0f, -1.0f, 1.0f), XMVectorSet(1.0f, 1.0f, 1.0f, 0.0f)
 };
 
-int AllocFromHostBuffer(size_t size, size_t alignment, int copies)
+int AllocFromHostBuffer(size_t size, size_t structureCopies, size_t alignment, ComponentFormatType format, int bufferCopies)
 {
  
     size_t allocSize = (size + alignment - 1) & ~((size_t)alignment - 1);
 
-    allocSize *= copies;
+    allocSize *= structureCopies;
+
+    allocSize *= bufferCopies;
 
     size_t location = deviceInstance.AllocFromDriverMemoryBuffer(hostBuffer, allocSize, alignment);
 
     int index = allocationHandleIndex++;
 
-    allocationHandle[index].bufferHandle = hostBuffer;
+    allocationHandle[index].memIndex = hostBuffer;
     allocationHandle[index].offset = location;
-    allocationHandle[index].totalDeviceAlloc = allocSize;
-    allocationHandle[index].requestedsize = size;
+    allocationHandle[index].deviceAllocSize = allocSize;
+    allocationHandle[index].requestedSize = size;
     allocationHandle[index].alignment = alignment;
-    allocationHandle[index].copies = copies;
-    allocationHandle[index].stridesize = (size + alignment - 1) & ~(alignment - 1);
-
+    allocationHandle[index].structureCopies = (int)structureCopies;
+    allocationHandle[index].formatType = format;
+    allocationHandle[index].allocType = (bufferCopies > 1) ? AllocationType::PERDRAW : AllocationType::STATIC;
     return index;
 }
 
-int AllocFromDeviceBuffer(size_t size, size_t alignment, int copies)
+int AllocFromDeviceBuffer(size_t size, size_t structureCopies, size_t alignment, ComponentFormatType format, int bufferCopies)
 {
 
     size_t allocSize = (size + alignment - 1) & ~((size_t)alignment - 1);
 
-    allocSize *= copies;
+    allocSize *= structureCopies;
+
+    allocSize *= bufferCopies;
 
     size_t location = deviceInstance.AllocFromDriverMemoryBuffer(deviceLocalBuffer, allocSize, alignment);
 
     int index = allocationHandleIndex++;
 
-    allocationHandle[index].bufferHandle = deviceLocalBuffer;
+    allocationHandle[index].memIndex = deviceLocalBuffer;
     allocationHandle[index].offset = location;
-    allocationHandle[index].totalDeviceAlloc = allocSize;
-    allocationHandle[index].requestedsize = size;
+    allocationHandle[index].deviceAllocSize = allocSize;
+    allocationHandle[index].requestedSize = size;
     allocationHandle[index].alignment = alignment;
-    allocationHandle[index].copies = copies;
-    allocationHandle[index].stridesize = (size + alignment - 1) & ~(alignment - 1);
+    allocationHandle[index].structureCopies = (int)structureCopies;
+    allocationHandle[index].formatType = format;
+    allocationHandle[index].allocType = (bufferCopies > 1) ? AllocationType::PERDRAW : AllocationType::STATIC;
 
     return index;
 }
@@ -709,11 +701,11 @@ void DoSceneStuff()
 
     ParseBMP(&details, "face1.bmp");
 
-    int cameraData = AllocFromHostBuffer(sizeof(Camera), sizeof(Camera), MAX_FRAMES_IN_FLIGHT);
-    int world1Data = AllocFromDeviceBuffer(sizeof(XMMATRIX), 256, MAX_FRAMES_IN_FLIGHT);
-    int world2Data = AllocFromDeviceBuffer(sizeof(XMMATRIX), 256, MAX_FRAMES_IN_FLIGHT);
-    int vertexOffset = AllocFromDeviceBuffer(sizeof(BoxVerts), 16, 1);
-    int indexOffset = AllocFromDeviceBuffer(sizeof(BoxIndices), 16, 1);
+    int cameraData = AllocFromHostBuffer(sizeof(Camera), 1, sizeof(Camera), ComponentFormatType::NO_BUFFER_FORMAT, MAX_FRAMES_IN_FLIGHT);
+    int world1Data = AllocFromDeviceBuffer(sizeof(XMMATRIX), 1,  256, ComponentFormatType::NO_BUFFER_FORMAT, MAX_FRAMES_IN_FLIGHT);
+    int world2Data = AllocFromDeviceBuffer(sizeof(XMMATRIX), 1, 256, ComponentFormatType::NO_BUFFER_FORMAT, MAX_FRAMES_IN_FLIGHT);
+    int vertexOffset = AllocFromDeviceBuffer(sizeof(BoxVerts), 1, 16, ComponentFormatType::NO_BUFFER_FORMAT, 1);
+    int indexOffset = AllocFromDeviceBuffer(sizeof(BoxIndices), 1, 16, ComponentFormatType::NO_BUFFER_FORMAT, 1);
 
     
     DriverMemoryBuffer* buffer = (DriverMemoryBuffer*)deviceInstance.GetAndValidateItem(deviceLocalBuffer, D12BUFFERMEMORYPOOL);
@@ -739,8 +731,8 @@ void DoSceneStuff()
     int camSRVDS = AllocateShaderResourceSet(mainLayout, 0, MAX_FRAMES_IN_FLIGHT);
 
     BindBufferToShaderResource(camSRVDS, cameraData, 0, 0);
-    BindImageResourceToShaderResource(camSRVDS, bgraImageMemoryPool, 1);
-    BindSamplerResourceToShaderResource(camSRVDS, bgraImageMemoryPool, 2);
+    BindImageResourceToShaderResource(camSRVDS, &bgraImageMemoryPool, 1, 0, 1);
+    BindSamplerResourceToShaderResource(camSRVDS, &bgraImageMemoryPool, 1, 0, 2);
 
     int worldOne = AllocateShaderResourceSet(mainLayout, 1, MAX_FRAMES_IN_FLIGHT);
     UploadConstant(worldOne, world1Data, 0);
@@ -1266,15 +1258,15 @@ int Render()
     deviceInstance.ExecuteCommandListsOnQueue(queueHandle, commandLists, cmdListIndex);
 
 
-    UINT syncInterval = g_VSync ? 1 : 0;
+  //  UINT syncInterval = g_VSync ? 1 : 0;
 
 
-    UINT presentFlags = g_TearingSupported && !g_VSync ? DXGI_PRESENT_ALLOW_TEARING : 0;
+   // UINT presentFlags = g_TearingSupported && !g_VSync ? DXGI_PRESENT_ALLOW_TEARING : 0;
 
 
     IDXGISwapChain4* lSwapChain = (IDXGISwapChain4*)deviceInstance.GetAndValidateItem(swapChain, DXGISWAPCHAIN);
 
-    if (FAILED(lSwapChain->Present(syncInterval, presentFlags)))
+    if (FAILED(lSwapChain->Present(0, 0)))
     {
         printf("Cannot present image\n");
         return -1;
@@ -1294,11 +1286,11 @@ int Render()
 void WriteToDeviceLocalMemory(int allocationIndex, void* data, size_t size, size_t offset, int copies)
 {
     
-	Allocation* alloc = &allocationHandle[allocationIndex];
+	RenderAllocation* alloc = &allocationHandle[allocationIndex];
 
-    size_t stride = (alloc->requestedsize + alloc->alignment - 1) & ~(alloc->alignment - 1);
+    size_t stride = ((alloc->requestedSize * alloc->structureCopies) + alloc->alignment - 1) & ~(alloc->alignment - 1);
 
-    deviceInstance.WriteToDeviceLocalMemory(alloc->bufferHandle, stagingBuffers[currentFrame], transferCommandBuffer, data, size, alloc->offset + offset, stride, copies);
+    deviceInstance.WriteToDeviceLocalMemory(alloc->memIndex, stagingBuffers[currentFrame], transferCommandBuffer, data, size, alloc->offset + offset, stride, copies);
 
 	transferCommandsUploaded++;
 }
@@ -1316,11 +1308,11 @@ void WriteToHostMemory(int allocationIndex, void* data, size_t size, size_t offs
 {
     void* mappedData = nullptr;
 
-    Allocation* alloc = &allocationHandle[allocationIndex];
+    RenderAllocation* alloc = &allocationHandle[allocationIndex];
 
-    size_t stride = (alloc->requestedsize + alloc->alignment - 1) & ~(alloc->alignment - 1);
+    size_t stride = ((alloc->requestedSize * alloc->structureCopies) + alloc->alignment - 1) & ~(alloc->alignment - 1);
 
-    deviceInstance.WriteToHostMemory(alloc->bufferHandle, data, size, alloc->offset + offset, stride, copies);
+    deviceInstance.WriteToHostMemory(alloc->memIndex, data, size, alloc->offset + offset, stride, copies);
 }
 
 
@@ -1412,31 +1404,14 @@ LRESULT CALLBACK winproc(HWND hwnd, UINT wm, WPARAM wp, LPARAM lp)
 
 EntryHandle CreateRootSignatureFromShaderGraph(ShaderGraph* graph)
 {
-    UINT numDescriptorsTables = graph->resourceSetCount, numRootParameters = graph->resourceSetCount, numOfRanges = graph->resourceCount;
+    UINT numDescriptorsTables = graph->resourceSetCount, numRootParameters = graph->resourceSetCount;
 
-    UINT samplerCount = 0;
+    UINT samplerCount = 0, numOfRanges = graph->resourceCount;
 
-    for (int i = 0; i < graph->resourceCount; i++)
+    for (int i = 0; i < graph->resourceSetCount; i++)
     {
-        ShaderResource* resource = (ShaderResource*)graph->GetResource(i);
-
-        switch (resource->type)
-        {
-        case ShaderResourceType::UNIFORM_BUFFER:
-
-            break;
-        case ShaderResourceType::SAMPLERSTATE:
-           
-            samplerCount++;
-            break;
-
-        case ShaderResourceType::CONSTANT_BUFFER:
-           
-            break;
-        case ShaderResourceType::IMAGE2D:
-
-            break;
-        }
+        ShaderSetLayout* layout = (ShaderSetLayout*)graph->GetSet(i);
+        samplerCount += layout->samplerCount;
     }
 
     if (samplerCount)
@@ -1662,7 +1637,7 @@ void CreateTablesFromResourceSet(int* descriptorsets, int numDescriptorSet, Pipe
 
     DescriptorHeapManager* samplerHeap = (DescriptorHeapManager*)deviceInstance.GetAndValidateItem(mainSamplerDescriptorHeap, D12DESCRIPTORMANAGER);
 
-    DescriptorHeapManager* stageMainHeap = (DescriptorHeapManager*)deviceInstance.GetAndValidateItem(stagingSRVDescriptorHeap, D12DESCRIPTORMANAGER);
+  //  DescriptorHeapManager* stageMainHeap = (DescriptorHeapManager*)deviceInstance.GetAndValidateItem(stagingSRVDescriptorHeap, D12DESCRIPTORMANAGER);
 
     DescriptorHeapManager* stageSamplerHeap = (DescriptorHeapManager*)deviceInstance.GetAndValidateItem(stagingSamplerDescriptorHeap, D12DESCRIPTORMANAGER);
 
@@ -1693,7 +1668,9 @@ void CreateTablesFromResourceSet(int* descriptorsets, int numDescriptorSet, Pipe
 
         maxSamplerFrameCount = max(maxSamplerFrameCount, numberOfTables);
 
-        int mainHeapIndex = stageMainHeap->descriptorHeapHandlePointer;
+        int mainHeapIndex = mainHeap->descriptorHeapHandlePointer;
+
+        int bufferCounts = set->viewCount;
 
         for (int i = 0; i < count; i++)
         {
@@ -1704,9 +1681,13 @@ void CreateTablesFromResourceSet(int* descriptorsets, int numDescriptorSet, Pipe
             case ShaderResourceType::IMAGE2D:
             {
                 ShaderResourceImage* image = (ShaderResourceImage*)header;
-                deviceInstance.CreateImageSRVDescriptorHandle(image->textureHandle,
-                    1, DXGI_FORMAT_B8G8R8A8_UNORM_SRGB, stageMainHeap, mainHeapIndex++, D3D12_SRV_DIMENSION_TEXTURE2D
-                );
+                for (int j = 0; j < numberOfTables; j++)
+                {
+                    deviceInstance.CreateImageSRVDescriptorHandle(image->textureHandles[0],
+                        1, DXGI_FORMAT_B8G8R8A8_UNORM_SRGB, mainHeap, mainHeapIndex + (j * bufferCounts), D3D12_SRV_DIMENSION_TEXTURE2D
+                    );
+                }
+                mainHeapIndex++;
                 break;
             }
             case ShaderResourceType::SAMPLERSTATE:
@@ -1721,7 +1702,7 @@ void CreateTablesFromResourceSet(int* descriptorsets, int numDescriptorSet, Pipe
             case ShaderResourceType::SAMPLER2D:
             case ShaderResourceType::SAMPLERCUBE:
             {
-                ShaderResourceImage* image = (ShaderResourceImage*)header;
+                printf("Unimplemented! %d\n", header->type);
 
                 break;
             }
@@ -1729,33 +1710,90 @@ void CreateTablesFromResourceSet(int* descriptorsets, int numDescriptorSet, Pipe
             {
                 ShaderResourceConstantBuffer* buffer = (ShaderResourceConstantBuffer*)header;
 
-                Allocation* alloc = &allocationHandle[buffer->allocationIndex];
+                RenderAllocation* alloc = &allocationHandle[buffer->allocationIndex];
 
-                deviceInstance.CreateCBVDescriptorHandle(alloc->bufferHandle, i * alloc->stridesize + alloc->offset, alloc->stridesize, stageMainHeap, mainHeapIndex++);
+                size_t stride = (alloc->requestedSize + alloc->alignment - 1) & ~(alloc->alignment - 1);
 
+                stride *= alloc->structureCopies;
+ 
+                for (int j = 0; j < numberOfTables; j++)
+                {
+                    deviceInstance.CreateCBVDescriptorHandle(alloc->memIndex, j * stride + alloc->offset, stride, mainHeap, mainHeapIndex + (j * bufferCounts));
+                }
+                mainHeapIndex++;
                 break;
             }
 
             case ShaderResourceType::STORAGE_BUFFER:
             {
                 ShaderResourceBuffer* buffer = (ShaderResourceBuffer*)header;
-                auto alloc = allocationHandle[buffer->allocation];
+                auto alloc = &allocationHandle[buffer->allocation];
+                size_t stride = (alloc->requestedSize + alloc->alignment - 1) & ~(alloc->alignment - 1);
+
+                for (int j = 0; j < numberOfTables; j++)
+                {
+                    if (buffer->action == ShaderResourceAction::SHADERWRITE || buffer->action == ShaderResourceAction::SHADERWRITE)
+                    {
+                        deviceInstance.CreateBufferUAVDescriptorHandle
+                        (
+                            alloc->memIndex,
+                            j * (stride * alloc->structureCopies) + alloc->offset,
+                            alloc->structureCopies,
+                            stride,
+                            0,
+                            ConvertComponentFormatToDXGIFormat(alloc->formatType),
+
+                            mainHeap,
+                            mainHeapIndex + (j * bufferCounts),
+                            D3D12_BUFFER_UAV_FLAG_NONE
+                        );
+                    }
+                    else
+                    {
+                        deviceInstance.CreateBufferSRVDescriptorHandle
+                        (
+                            alloc->memIndex,
+                            j * (stride * alloc->structureCopies) + alloc->offset,
+                            alloc->structureCopies,
+                            stride,
+                            ConvertComponentFormatToDXGIFormat(alloc->formatType),
+                            mainHeap,
+                            mainHeapIndex + (j * bufferCounts),
+                            D3D12_SRV_DIMENSION_BUFFER
+                        );
+                    }
+                }
+
+                mainHeapIndex++;
+
 
                 break;
             }
             case ShaderResourceType::UNIFORM_BUFFER:
             {
                 ShaderResourceBuffer* buffer = (ShaderResourceBuffer*)header;
-                Allocation* alloc = &allocationHandle[buffer->allocation];
 
-                deviceInstance.CreateSRVDescriptorHandle(alloc->bufferHandle,
-                    i * alloc->stridesize + alloc->offset,
-                    buffer->arrayCount, alloc->requestedsize,
-                    DXGI_FORMAT_UNKNOWN,
-                    stageMainHeap,
-                    mainHeapIndex++,
-                    D3D12_SRV_DIMENSION_BUFFER
-                );
+                RenderAllocation* alloc = &allocationHandle[buffer->allocation];
+
+                size_t stride = (alloc->requestedSize + alloc->alignment - 1) & ~(alloc->alignment - 1);
+
+                for (int j = 0; j < numberOfTables; j++)
+                {
+
+                    deviceInstance.CreateBufferSRVDescriptorHandle
+                    (
+                        alloc->memIndex,
+                        j * (stride * alloc->structureCopies) + alloc->offset,
+                        alloc->structureCopies,
+                        stride,
+                        ConvertComponentFormatToDXGIFormat(alloc->formatType),
+                        mainHeap,
+                        mainHeapIndex + (j * bufferCounts),
+                        D3D12_SRV_DIMENSION_BUFFER
+                    );
+                }
+
+                mainHeapIndex++;
 
                 break;
             }
@@ -1765,28 +1803,57 @@ void CreateTablesFromResourceSet(int* descriptorsets, int numDescriptorSet, Pipe
             {
                 ShaderResourceBufferView* bufferView = (ShaderResourceBufferView*)header;
 
+                RenderAllocation* alloc = &allocationHandle[bufferView->allocationIndex];
+
+                size_t stride = (alloc->requestedSize + alloc->alignment - 1) & ~(alloc->alignment - 1);
+
+                for (int j = 0; j < numberOfTables; j++)
+                {
+                    if (bufferView->action == ShaderResourceAction::SHADERWRITE || bufferView->action == ShaderResourceAction::SHADERWRITE)
+                    {
+                        deviceInstance.CreateBufferUAVDescriptorHandle
+                        (
+                            alloc->memIndex,
+                            j* (stride* alloc->structureCopies) + alloc->offset,
+                            alloc->structureCopies,
+                            stride,
+                            0,
+                            ConvertComponentFormatToDXGIFormat(alloc->formatType),
+
+                            mainHeap,
+                            mainHeapIndex + (j * bufferCounts),
+                            D3D12_BUFFER_UAV_FLAG_NONE
+                        );
+                    }
+                    else
+                    {
+                        deviceInstance.CreateBufferSRVDescriptorHandle
+                        (
+                            alloc->memIndex,
+                            j * (stride * alloc->structureCopies) + alloc->offset,
+                            alloc->structureCopies,
+                            stride,
+                            ConvertComponentFormatToDXGIFormat(alloc->formatType),
+                            mainHeap,
+                            mainHeapIndex + (j * bufferCounts),
+                            D3D12_SRV_DIMENSION_BUFFER
+                        );
+                    }
+                }
+
+                mainHeapIndex++;
+
+
                 break;
             }
             }
         }
 
 
-        int mainTableCount = mainHeapIndex - stageMainHeap->descriptorHeapHandlePointer;
-
-        for (int j = 0; j < numberOfTables; j++)
-        {
-            deviceInstance.CopyDescriptors(mainTableCount, 
-                stageMainHeap->descriptorHeapHandlePointer, mainHeap->descriptorHeapHandlePointer + (mainTableCount * j),
-                stageMainHeap->descriptorHeap, mainHeap->descriptorHeap,
-                stageMainHeap->descriptorHeapHandleSize, mainHeap->descriptorHeapHandleSize,
-                D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV
-            );
-        }
-
         obj->descriptorHeapPointer[i] = srvDescriptorTablesStart[descriptorid] = mainHeap->descriptorHeapHandlePointer;
-        obj->resourceCount[i] = srvDescriptorTablesCounts[descriptorid] = mainTableCount;
+        obj->resourceCount[i] = srvDescriptorTablesCounts[descriptorid] = bufferCounts;
 
-        mainHeap->descriptorHeapHandlePointer += (mainTableCount * numberOfTables);
+        mainHeap->descriptorHeapHandlePointer += (bufferCounts * numberOfTables);
     }
 
     if (samplerCount)
@@ -1969,6 +2036,11 @@ ShaderGraph* CreateShaderGraph(
         int bindingCount = 0;
 
         setLay->resourceStart = resourceIter;
+
+        setLay->samplerCount = 0;
+        setLay->viewCount = 0;
+
+
         while (tag && tag->hashCode == hash("ShaderResourceItem"))
         {
 
@@ -1980,6 +2052,17 @@ ShaderGraph* CreateShaderGraph(
             else
             {
                 resource->binding = bindingCount;
+
+                
+            }
+
+            if (tag->resourceType == ShaderResourceType::SAMPLERSTATE)
+            {
+                setLay->samplerCount++;
+            }
+            else
+            {
+                setLay->viewCount++;
             }
 
             resource->stages = tag->shaderstage;

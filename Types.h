@@ -2,6 +2,93 @@
 #include <string>
 #include <array>
 #include "Files.h"
+#pragma once
+#include <cstdint>
+
+typedef size_t EntryHandle;
+
+/* common types */
+
+#define KiB 1024
+#define MiB 1024 * KiB
+#define GiB 1024 * MiB
+
+/* Rendering State Types */
+
+enum RenderingBackend
+{
+    VULKAN = 1,
+    DXD12 = 2,
+};
+
+enum RasterizerTest
+{
+    NEVER = 0,
+    LESS = 1,
+    EQUAL = 2,
+    LESSEQUAL = 3,
+    GREATER = 4,
+    NOTEQUAL = 5,
+    GREATEREQUAL = 6,
+    ALLPASS = 7
+};
+
+enum ImageFormat
+{
+    X8L8U8V8 = 0,
+    DXT1 = 1,
+    DXT3 = 2,
+    R8G8B8A8 = 3,
+    B8G8R8A8 = 4,
+    D24UNORMS8STENCIL = 5,
+    D32FLOATS8STENCIL = 6,
+    D32FLOAT = 7,
+    R8G8B8A8_UNORM = 8,
+    R8G8B8 = 9,
+    B8G8R8A8_UNORM = 10,
+    IMAGE_UNKNOWN = 0x7fffffff
+};
+
+enum TextureIOType
+{
+    BMP = 0,
+};
+
+enum PrimitiveType
+{
+    TRIANGLES = 0,
+    TRISTRIPS = 6,
+    TRIFAN = 7,
+    POINTSLIST = 8,
+    LINELIST = 9,
+    LINESTRIPS = 10
+};
+
+enum class ImageLayout
+{
+    UNDEFINED = 0,
+    WRITEABLE = 1,
+    SHADERREADABLE = 2,
+    COLORATTACHMENT = 3,
+    DEPTHSTENCILATTACHMENT = 4
+};
+
+enum class ImageUsage
+{
+    DEPTHSTENCIL = 0,
+    COLOR = 1
+};
+
+
+/* Render Management Types */
+
+enum class AllocationType
+{
+    STATIC = 0,
+    PERFRAME = 1,
+    PERDRAW = 2
+};
+
 enum class ComponentFormatType
 {
     NO_BUFFER_FORMAT = 0,
@@ -19,20 +106,66 @@ enum class ComponentFormatType
 
 };
 
-enum class VertexUsage
+
+enum class TransferType
 {
-    POSITION = 0,
-    TEX0 = 1,
-    TEX1 = 2,
-    TEX2 = 3,
-    TEX3 = 4,
-    NORMAL = 5,
-    BONES = 6,
-    WEIGHTS = 7,
-    COLOR0 = 8
+    CACHED = 0,
+    MEMORY = 1,
 };
 
 
+/* Shader Resource Definitions */
+
+enum BarrierActionBits
+{
+    WRITE_SHADER_RESOURCE = 1,
+    READ_SHADER_RESOURCE = 2,
+    READ_UNIFORM_BUFFER = 4,
+    READ_VERTEX_INPUT = 8,
+    READ_INDIRECT_COMMAND = 16
+};
+
+enum BarrierStageBits
+{
+    VERTEX_SHADER_BARRIER = 1,
+    VERTEX_INPUT_BARRIER = 2,
+    COMPUTE_BARRIER = 4,
+    FRAGMENT_BARRIER = 8,
+    BEGINNING_OF_PIPE = 16,
+    INDIRECT_DRAW_BARRIER = 32,
+};
+
+typedef int BarrierAction;
+
+typedef int BarrierStage;
+
+enum class MemoryBarrierType
+{
+    MEMORY_BARRIER = 0,
+    IMAGE_BARRIER = 1,
+    BUFFER_BARRIER = 2,
+    BARRIER_MAX_ENUM
+};
+
+struct ShaderResourceBarrier
+{
+    MemoryBarrierType type;
+    BarrierStage srcStage;
+    BarrierStage dstStage;
+    BarrierAction srcAction;
+    BarrierAction dstAction;
+};
+
+struct ImageShaderResourceBarrier : public ShaderResourceBarrier
+{
+    ImageLayout srcResourceLayout;
+    ImageLayout dstResourceLayout;
+    ImageUsage imageType;
+};
+
+struct ShaderResourceBufferBarrier : public ShaderResourceBarrier
+{
+};
 
 enum class ShaderResourceType
 {
@@ -44,7 +177,6 @@ enum class ShaderResourceType
     IMAGESTORE3D = 32,
     IMAGE2D = 33,
     IMAGE3D = 34,
-    SAMPLERBINDLESS = 64,
     BUFFER_VIEW = 128,
     SAMPLER3D = 129,
     SAMPLERCUBE = 130,
@@ -68,12 +200,14 @@ enum ShaderStageTypeBits
 
 typedef int ShaderStageType;
 
-
 struct ShaderSetLayout
 {
     int vulkanDescLayout;
+    int dx12DescriptorTable;
     int bindingCount;
     int resourceStart;
+    int samplerCount;
+    int viewCount;
 };
 
 struct ShaderResource
@@ -94,6 +228,8 @@ struct ShaderResourceSet
     int layoutHandle;
     int setCount;
     int barrierCount;
+    int samplerCount;
+    int viewCount;
 };
 
 struct ShaderResourceHeader
@@ -102,6 +238,282 @@ struct ShaderResourceHeader
     ShaderResourceAction action;
     int binding;
     int arrayCount;
+};
+
+struct ShaderResourceSampler : public ShaderResourceHeader
+{
+    EntryHandle* samplerHandles;
+    int samplerCount;
+    int firstSampler;
+};
+
+struct ShaderResourceImage : public ShaderResourceHeader
+{
+    EntryHandle* textureHandles;
+    int textureCount;
+    int firstTexture;
+};
+
+struct ShaderResourceBuffer : public ShaderResourceHeader
+{
+    int allocation;
+    int offset;
+};
+
+struct ShaderResourceBufferView : public ShaderResourceHeader
+{
+    int subAllocations;
+    int allocationIndex;
+};
+
+
+struct ShaderResourceConstantBuffer : public ShaderResourceHeader
+{
+    ShaderStageType stage;
+    int size;
+    int offset;
+    void* data;
+    int allocationIndex;
+};
+
+struct ShaderComputeLayout
+{
+    unsigned long x;
+    unsigned long y;
+    unsigned long z;
+};
+
+/* Shader Resource Update */
+
+struct ShaderResourceUpdate
+{
+    ShaderResourceType type;
+    int descriptorSet;
+    int bindingIndex;
+    int copyCount;
+    void* data;
+    int dataSize;
+};
+
+struct ResourceArrayUpdate
+{
+    int dstBegin;
+    int count;
+    EntryHandle* handles;
+};
+
+
+
+/* Intermediary Pipeline Object */
+
+struct GraphicsIntermediaryPipelineInfo
+{
+    uint32_t drawType;
+    int vertexBufferHandle;
+    uint32_t vertexCount;
+    uint32_t pipelinename;
+    uint32_t descCount;
+    int* descriptorsetid;
+    int indexBufferHandle;
+    uint32_t indexCount;
+    uint32_t instanceCount;
+    uint32_t indexSize;
+    uint32_t indexOffset;
+    uint32_t vertexOffset;
+    int indirectAllocation;
+    int indirectDrawCount;
+    int indirectCountAllocation;
+};
+
+struct ComputeIntermediaryPipelineInfo
+{
+    uint32_t x;
+    uint32_t y;
+    uint32_t z;
+    uint32_t pipelinename;
+    uint32_t descCount;
+    int* descriptorsetid;
+};
+
+
+
+/* Host memory update */
+
+struct HostTransferRegion
+{
+    TransferType type;
+    int size;
+    int copyCount;
+    int allocationIndex;
+    int allocoffset;
+    void* data;
+};
+
+struct DeviceTransferRegion
+{
+    TransferType transferType;
+    int size;
+    int copyCount;
+    int allocationIndex;
+    int allocoffset;
+    void* data;
+};
+
+struct TextureMemoryRegion
+{
+    void* data;
+    uint32_t* imageSizes;
+    size_t totalSize;
+    EntryHandle textureIndex;
+    int width;
+    int height;
+    int mipLevels;
+    int layers;
+    ImageFormat format;
+};
+
+struct TransferRegionLink
+{
+    int region;
+    int next;
+};
+
+struct TransferCommand
+{
+    int fillVal;
+    int size;
+    int offset;
+    int allocationIndex;
+    int copycount;
+    BarrierStage dstStage;
+    BarrierAction dstAction;
+};
+
+/* Allocation management */
+struct RenderAllocation
+{
+    EntryHandle memIndex;
+    size_t offset;
+    size_t deviceAllocSize;
+    size_t requestedSize;
+    size_t alignment;
+    EntryHandle viewIndex;
+    AllocationType allocType;
+    ComponentFormatType formatType;
+    int structureCopies;
+};
+
+
+
+/* */
+
+enum class VertexUsage : size_t
+{
+    POSITION = 0,
+    TEX0 = 1,
+    TEX1 = 2,
+    TEX2 = 3,
+    TEX3 = 4,
+    NORMAL = 5,
+    BONES = 6,
+    WEIGHTS = 7,
+    COLOR0 = 8,
+    TANGENTS = 9,
+    NUM_VERTEX_FORMAT
+};
+
+enum class VertexBufferRate
+{
+    PERVERTEX = 0,
+    PERINSTANCE = 1,
+};
+
+struct VertexInputDescription
+{
+    ComponentFormatType format;
+    int byteoffset;
+    VertexUsage vertexusage;
+};
+
+struct VertexBufferDescription
+{
+    VertexBufferRate rate;
+    int descCount;
+    int perInputSize;
+    VertexInputDescription descriptions[10];
+};
+
+enum TriangleWinding
+{
+    CW = 0,
+    CCW = 1
+};
+
+enum class CullMode
+{
+    CULL_NONE = 0,
+    CULL_BACK = 1,
+    CULL_FRONT = 2,
+};
+
+enum class BlendOp
+{
+    LOGIC_COPY = 1
+};
+
+enum class StencilOp
+{
+    REPLACE = 0,
+    KEEP = 1,
+    ZERO = 2,
+};
+
+struct FaceStencilData
+{
+    StencilOp failOp;
+    StencilOp passOp;
+    StencilOp depthFailOp;
+    RasterizerTest stencilCompare;
+    int writeMask;
+    int compareMask;
+    int reference;
+};
+
+struct GenericPipelineStateInfo
+{
+    PrimitiveType primType;
+    float lineWidth;
+    TriangleWinding windingOrder;
+    bool depthEnable;
+    bool depthWrite;
+    RasterizerTest depthTest;
+    bool StencilEnable;
+    FaceStencilData frontFace;
+    FaceStencilData backFace;
+    int sampleCountLow;
+    int sampleCountHigh;
+    ImageFormat colorFormat;
+    ImageFormat depthFormat;
+    BlendOp blendOp;
+    CullMode cullMode;
+    int vertexBufferDescCount;
+    VertexBufferDescription vertexBufferDesc[4];
+};
+
+enum AppPipelineHandleType
+{
+    COMPUTESO,
+    GRAPHICSO,
+    INDIRECTSO,
+};
+
+struct PipelineHandle
+{
+    int group;
+    int indexForHandles;
+    int numHandles;
+    int graphIndex;
+    int graphCount;
 };
 
 struct ShaderMap
@@ -153,12 +565,6 @@ void* ShaderDetails::GetShaderData()
     return (void*)((uintptr_t)this + sizeof(ShaderDetails) + shaderNameSize);
 }
 
-struct ShaderComputeLayout
-{
-    unsigned long x;
-    unsigned long y;
-    unsigned long z;
-};
 
 
 struct ShaderXMLTag
@@ -800,110 +1206,6 @@ constexpr int ASCIIToInt(char* str)
 
     return out;
 }
-enum class ImageLayout
-{
-    UNDEFINED = 0,
-    WRITEABLE = 1,
-    SHADERREADABLE = 2,
-    COLORATTACHMENT = 3,
-    DEPTHSTENCILATTACHMENT = 4
-};
-
-enum class ImageUsage
-{
-    DEPTHSTENCIL = 0,
-    COLOR = 1
-};
-
-enum BarrierActionBits
-{
-    WRITE_SHADER_RESOURCE = 1,
-    READ_SHADER_RESOURCE = 2,
-    READ_UNIFORM_BUFFER = 4,
-    READ_VERTEX_INPUT = 8,
-    READ_INDIRECT_COMMAND = 16
-};
-
-enum BarrierStageBits
-{
-    VERTEX_SHADER_BARRIER = 1,
-    VERTEX_INPUT_BARRIER = 2,
-    COMPUTE_BARRIER = 4,
-    FRAGMENT_BARRIER = 8,
-    BEGINNING_OF_PIPE = 16,
-    INDIRECT_DRAW_BARRIER = 32,
-};
-
-typedef int BarrierAction;
-
-typedef int BarrierStage;
-
-enum class MemoryBarrierType
-{
-    MEMORY_BARRIER = 0,
-    IMAGE_BARRIER = 1,
-    BUFFER_BARRIER = 2,
-    BARRIER_MAX_ENUM
-};
-
-struct ShaderResourceBarrier
-{
-    MemoryBarrierType type;
-    BarrierStage srcStage;
-    BarrierStage dstStage;
-    BarrierAction srcAction;
-    BarrierAction dstAction;
-};
-
-struct ImageShaderResourceBarrier : public ShaderResourceBarrier
-{
-    ImageLayout srcResourceLayout;
-    ImageLayout dstResourceLayout;
-    ImageUsage imageType;
-};
-
-struct ShaderResourceBufferBarrier : public ShaderResourceBarrier
-{
-};
-
-struct ShaderResourceSampler : public ShaderResourceHeader
-{
-    EntryHandle samplerHandle;
-};
-
-struct ShaderResourceImage : public ShaderResourceHeader
-{
-    EntryHandle textureHandle;
-};
-
-struct ShaderResourceSamplerBindless : public ShaderResourceHeader
-{
-    void** textureHandles;
-    int textureCount;
-};
-
-struct ShaderResourceBuffer : public ShaderResourceHeader
-{
-    int allocation;
-    int offset;
-};
-
-struct ShaderResourceBufferView : public ShaderResourceHeader
-{
-    int subAllocations;
-    int allocationIndex;
-};
-
-
-struct ShaderResourceConstantBuffer : public ShaderResourceHeader
-{
-    ShaderStageType stage;
-    int size;
-    int offset;
-    void* data;
-    int allocationIndex;
-};
-
 
 static char AllocateDSMemory[16 * 1024];
 uintptr_t DSAllocator = 0;
@@ -935,7 +1237,7 @@ void BindBufferToShaderResource(int descriptorSet, int allocationIndex, int bind
     header->offset = offset;
 }
 
-void BindImageResourceToShaderResource(int descriptorSet, size_t index, int bindingIndex)
+void BindImageResourceToShaderResource(int descriptorSet, EntryHandle* index, int textureCount, int firstTexture, int bindingIndex)
 {
     uintptr_t head = descriptorSets[descriptorSet];
     ShaderResourceSet* set = (ShaderResourceSet*)head;
@@ -946,10 +1248,12 @@ void BindImageResourceToShaderResource(int descriptorSet, size_t index, int bind
     if (header->type != ShaderResourceType::IMAGESTORE2D && header->type != ShaderResourceType::IMAGE2D)
         return;
 
-    header->textureHandle = index;
+    header->textureHandles = index;
+    header->textureCount = textureCount;
+    header->firstTexture = firstTexture;
 }
 
-void BindSamplerResourceToShaderResource(int descriptorSet, EntryHandle index, int bindingIndex)
+void BindSamplerResourceToShaderResource(int descriptorSet, EntryHandle* indices, int samplerCount, int firstSampler, int bindingIndex)
 {
     uintptr_t head = descriptorSets[descriptorSet];
     ShaderResourceSet* set = (ShaderResourceSet*)head;
@@ -960,10 +1264,12 @@ void BindSamplerResourceToShaderResource(int descriptorSet, EntryHandle index, i
     if (header->type != ShaderResourceType::SAMPLERSTATE)
         return;
 
-    header->samplerHandle = index;
+    header->samplerHandles = indices;
+    header->samplerCount = samplerCount;
+    header->firstSampler = firstSampler;
 }
 
-void BindSampledImageToShaderResource(int descriptorSet, EntryHandle index, int bindingIndex)
+void BindSampledImageToShaderResource(int descriptorSet, EntryHandle* index, int textureCount, int firstTexture, int bindingIndex)
 {
     uintptr_t head = descriptorSets[descriptorSet];
     ShaderResourceSet* set = (ShaderResourceSet*)head;
@@ -974,22 +1280,25 @@ void BindSampledImageToShaderResource(int descriptorSet, EntryHandle index, int 
     if (header->type != ShaderResourceType::SAMPLER2D && header->type != ShaderResourceType::SAMPLERCUBE && header->type != ShaderResourceType::SAMPLER3D)
         return;
 
-    header->textureHandle = index;
+    header->textureHandles = index;
+    header->textureCount = textureCount;
+    header->firstTexture = firstTexture;
 }
 
-void BindSampledImageArrayToShaderResource(int descriptorSet, void** indices, uint32_t texCount, int bindingIndex)
+void BindSampledImageArrayToShaderResource(int descriptorSet, EntryHandle* indices, uint32_t texCount, int firstTexture, int bindingIndex)
 {
     uintptr_t head = descriptorSets[descriptorSet];
     ShaderResourceSet* set = (ShaderResourceSet*)head;
     uintptr_t* offsets = (uintptr_t*)(head + sizeof(ShaderResourceSet));
 
-    ShaderResourceSamplerBindless* header = (ShaderResourceSamplerBindless*)offsets[bindingIndex];
+    ShaderResourceImage* header = (ShaderResourceImage*)offsets[bindingIndex];
 
-    if (header->type != ShaderResourceType::SAMPLERBINDLESS)
+    if (header->type != ShaderResourceType::SAMPLER3D && header->type != ShaderResourceType::SAMPLER2D && header->type != ShaderResourceType::SAMPLERCUBE)
         return;
 
     header->textureHandles = indices;
     header->textureCount = texCount;
+    header->firstTexture = firstTexture;
 }
 
 void BindBufferView(int descriptorSet, int allocationIndex, int bindingIndex, int subAllocations)
@@ -1165,12 +1474,15 @@ int AllocateShaderResourceSet(ShaderGraph* graph, uint32_t targetSet, int setCou
     ShaderResourceSet* set = (ShaderResourceSet*)ptr;
     ptr += sizeof(ShaderResourceSet);
 
+
     ShaderSetLayout* resourceSet = (ShaderSetLayout*)graph->GetSet(targetSet);
 
     set->bindingCount = resourceSet->bindingCount;
     set->layoutHandle = resourceSet->vulkanDescLayout;
     set->setCount = setCount;
     set->barrierCount = 0;
+    set->samplerCount = resourceSet->samplerCount;
+    set->viewCount = resourceSet->viewCount;
 
     uintptr_t* offset = (uintptr_t*)ptr;
 
@@ -1203,30 +1515,35 @@ int AllocateShaderResourceSet(ShaderGraph* graph, uint32_t targetSet, int setCou
         {
         case ShaderResourceType::SAMPLERSTATE:
         {
-
+            ShaderResourceSampler* image = (ShaderResourceSampler*)ptr;
+            image->samplerHandles = nullptr;
+            image->samplerCount = 0;
+            image->firstSampler = 0;
             ptr += sizeof(ShaderResourceSampler);
             break;
         }
         case ShaderResourceType::IMAGE2D:
         case ShaderResourceType::IMAGESTORE2D:
         {
+            ShaderResourceImage* image = (ShaderResourceImage*)ptr;
+            image->textureHandles = nullptr;
+            image->textureCount = 0;
+            image->firstTexture = 0;
             ptr += sizeof(ShaderResourceImage);
             memBarrierType = MemoryBarrierType::IMAGE_BARRIER;
             if (resource->action == ShaderResourceAction::SHADERWRITE || resource->action == ShaderResourceAction::SHADERREADWRITE)
             {
-                /*
                 ImageShaderResourceBarrier* barriers = (ImageShaderResourceBarrier*)ptr;
-                barriers->dstStage = ConvertShaderStageToBarrierStage(resource->stages);
+                //barriers->dstStage = ConvertShaderStageToBarrierStage(resource->stages);
                 barriers->dstAction = WRITE_SHADER_RESOURCE;
                 barriers->type = memBarrierType;
 
-                barriers[1].srcStage = ConvertShaderStageToBarrierStage(resource->stages);
+              //  barriers[1].srcStage = ConvertShaderStageToBarrierStage(resource->stages);
                 barriers[1].srcAction = WRITE_SHADER_RESOURCE;
                 barriers[1].type = memBarrierType;
 
                 ptr += (sizeof(ImageShaderResourceBarrier) * 2);
                 set->barrierCount += 2;
-                */
             }
             break;
         }
@@ -1234,26 +1551,22 @@ int AllocateShaderResourceSet(ShaderGraph* graph, uint32_t targetSet, int setCou
         case ShaderResourceType::SAMPLER2D:
         case ShaderResourceType::SAMPLERCUBE:
         {
+            ShaderResourceImage* image = (ShaderResourceImage*)ptr;
+            image->textureHandles = nullptr;
+            image->textureCount = 0;
+            image->firstTexture = 0;
+
             ptr += sizeof(ShaderResourceImage);
             memBarrierType = MemoryBarrierType::IMAGE_BARRIER;
             if (resource->action == ShaderResourceAction::SHADERWRITE || resource->action == ShaderResourceAction::SHADERREADWRITE)
             {
-                /*
                 ImageShaderResourceBarrier* barriers = (ImageShaderResourceBarrier*)ptr;
-                barriers->srcStage = ConvertShaderStageToBarrierStage(resource->stages);
+               // barriers->srcStage = ConvertShaderStageToBarrierStage(resource->stages);
                 barriers->srcAction = WRITE_SHADER_RESOURCE;
                 barriers->type = memBarrierType;
                 ptr += (sizeof(ImageShaderResourceBarrier));
                 set->barrierCount++;
-                */
             }
-            break;
-        }
-        case ShaderResourceType::SAMPLERBINDLESS:
-        {
-            memBarrierType = MemoryBarrierType::IMAGE_BARRIER;
-            memset((void*)ptr, 0, sizeof(ShaderResourceSamplerBindless));
-            ptr += sizeof(ShaderResourceSamplerBindless);
             break;
         }
         case ShaderResourceType::CONSTANT_BUFFER:
@@ -1262,8 +1575,6 @@ int AllocateShaderResourceSet(ShaderGraph* graph, uint32_t targetSet, int setCou
             constants->size = resource->size;
             constants->offset = resource->offset;
             constants->stage = resource->stages;
-            constants->data = NULL;
-            constants->allocationIndex = -1;
             ptr += sizeof(ShaderResourceConstantBuffer);
             break;
         }
@@ -1274,14 +1585,12 @@ int AllocateShaderResourceSet(ShaderGraph* graph, uint32_t targetSet, int setCou
             ptr += sizeof(ShaderResourceBuffer);
             if (resource->action == ShaderResourceAction::SHADERWRITE || resource->action == ShaderResourceAction::SHADERREADWRITE)
             {
-                /*
                 ShaderResourceBarrier* barriers = (ShaderResourceBarrier*)ptr;
-                barriers->srcStage = ConvertShaderStageToBarrierStage(resource->stages);
+               // barriers->srcStage = ConvertShaderStageToBarrierStage(resource->stages);
                 barriers->srcAction = WRITE_SHADER_RESOURCE;
                 barriers->type = memBarrierType;
                 ptr += (sizeof(ShaderResourceBufferBarrier));
                 set->barrierCount++;
-                */
             }
             break;
         }
@@ -1291,14 +1600,12 @@ int AllocateShaderResourceSet(ShaderGraph* graph, uint32_t targetSet, int setCou
             ptr += sizeof(ShaderResourceBufferView);
             if (resource->action == ShaderResourceAction::SHADERWRITE || resource->action == ShaderResourceAction::SHADERREADWRITE)
             {
-                /*
                 ShaderResourceBarrier* barriers = (ShaderResourceBarrier*)ptr;
-                barriers->srcStage = ConvertShaderStageToBarrierStage(resource->stages);
+               // barriers->srcStage = ConvertShaderStageToBarrierStage(resource->stages);
                 barriers->srcAction = WRITE_SHADER_RESOURCE;
                 barriers->type = memBarrierType;
                 ptr += (sizeof(ShaderResourceBufferBarrier));
                 set->barrierCount++;
-                (*/
             }
             break;
         }
@@ -1317,132 +1624,6 @@ int AllocateShaderResourceSet(ShaderGraph* graph, uint32_t targetSet, int setCou
     return ret;
 }
 
-enum RenderingBackend
-{
-    VULKAN = 1,
-    DXD12 = 2,
-};
-
-enum RasterizerTest
-{
-    NEVER = 0,
-    LESS = 1,
-    EQUAL = 2,
-    LESSEQUAL = 3,
-    GREATER = 4,
-    NOTEQUAL = 5,
-    GREATEREQUAL = 6,
-    ALLPASS = 7
-};
-
-enum ImageFormat
-{
-    X8L8U8V8 = 0,
-    DXT1 = 1,
-    DXT3 = 2,
-    R8G8B8A8 = 3,
-    B8G8R8A8 = 4,
-    D24UNORMS8STENCIL = 5,
-    D32FLOATS8STENCIL = 6,
-    D32FLOAT = 7,
-    R8G8B8A8_UNORM = 8,
-    R8G8B8 = 9,
-    B8G8R8A8_UNORM = 10,
-    IMAGE_UNKNOWN = 0x7fffffff
-};
-
-enum TextureIOType
-{
-    BMP = 0,
-};
-
-enum PrimitiveType
-{
-    TRIANGLES = 0,
-    TRISTRIPS = 6,
-    TRIFAN = 7,
-    POINTSLIST = 8,
-    LINELIST = 9,
-    LINESTRIPS = 10
-};
-
-enum class VertexBufferRate
-{
-    PERVERTEX = 0,
-    PERINSTANCE = 1,
-};
-
-struct VertexInputDescription
-{
-    ComponentFormatType format;
-    int byteoffset;
-    VertexUsage vertexusage;
-};
-
-struct VertexBufferDescription
-{
-    VertexBufferRate rate;
-    int descCount;
-    int perInputSize;
-    VertexInputDescription descriptions[10];
-};
-
-enum TriangleWinding
-{
-    CW = 0,
-    CCW = 1
-};
-
-enum class CullMode
-{
-    CULL_NONE = 0,
-    CULL_BACK = 1,
-    CULL_FRONT = 2,
-};
-
-enum class BlendOp
-{
-    LOGIC_COPY = 1
-};
-
-enum class StencilOp
-{
-    REPLACE = 0,
-    KEEP = 1,
-    ZERO = 2,
-};
-
-struct FaceStencilData
-{
-    StencilOp failOp;
-    StencilOp passOp;
-    StencilOp depthFailOp;
-    RasterizerTest stencilCompare;
-    int writeMask;
-    int compareMask;
-    int reference;
-};
-
-struct GenericPipelineStateInfo
-{
-    PrimitiveType primType;
-    float lineWidth;
-    TriangleWinding windingOrder;
-    bool depthEnable;
-    bool depthWrite;
-    RasterizerTest depthTest;
-    bool StencilEnable;
-    FaceStencilData frontFace;
-    FaceStencilData backFace;
-    int sampleCountLow;
-    int sampleCountHigh;
-    ImageFormat colorFormat;
-    ImageFormat depthFormat;
-    BlendOp blendOp;
-    CullMode cullMode;
-    int vertexBufferDescCount;
-    VertexBufferDescription vertexBufferDesc[4];
-};
 
 struct PipelineXMLTag
 {

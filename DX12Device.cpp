@@ -171,7 +171,9 @@ void* DX12Device::GetAndValidateItem(EntryHandle poolHandle, DX12ComType type)
     PoolItem* item = &deviceHandlePool[poolHandle];
     if (type != item->comType)
     {
-        printf("Mismatched entry in pools");
+        printf("Mismatched entry in pools %d %d", type, item->comType);
+
+
         return NULL;
     }
 
@@ -1163,7 +1165,7 @@ void DX12Device::CreateImageSRVDescriptorHandle(EntryHandle bufferPoolHandle, UI
 
 }
 
-void DX12Device::CreateSRVDescriptorHandle(EntryHandle bufferPoolHandle, UINT offset, UINT numCount, UINT size, DXGI_FORMAT format, DescriptorHeapManager* heap, UINT heapIndex, D3D12_SRV_DIMENSION dimension)
+void DX12Device::CreateBufferSRVDescriptorHandle(EntryHandle bufferPoolHandle, UINT offset, UINT numCount, UINT size, DXGI_FORMAT format, DescriptorHeapManager* heap, UINT heapIndex, D3D12_SRV_DIMENSION dimension)
 {
 
     UINT firstElement = offset / size;
@@ -1187,7 +1189,7 @@ void DX12Device::CreateSRVDescriptorHandle(EntryHandle bufferPoolHandle, UINT of
 
 }
 
-void DX12Device::CreateUAVDescriptorHandle(EntryHandle bufferPoolHandle, UINT offset, UINT numCount, UINT size, DXGI_FORMAT format, DescriptorHeapManager* heap, UINT heapIndex)
+void DX12Device::CreateBufferUAVDescriptorHandle(EntryHandle bufferPoolHandle, UINT offset, UINT numCount, UINT size, UINT counterOffsetInBytes, DXGI_FORMAT format, DescriptorHeapManager* heap, UINT heapIndex, D3D12_BUFFER_UAV_FLAGS uavFlags)
 {
 
     UINT firstElement = offset / size;
@@ -1202,11 +1204,12 @@ void DX12Device::CreateUAVDescriptorHandle(EntryHandle bufferPoolHandle, UINT of
     D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
 
     uavDesc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
-    uavDesc.Format = DXGI_FORMAT_UNKNOWN; // structured buffer
+    uavDesc.Format = format; // structured buffer
     uavDesc.Buffer.FirstElement = firstElement;
     uavDesc.Buffer.NumElements = numCount;
     uavDesc.Buffer.StructureByteStride = size;
-    uavDesc.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_NONE;
+    uavDesc.Buffer.Flags = uavFlags;
+    uavDesc.Buffer.CounterOffsetInBytes = counterOffsetInBytes ;
 
 
     deviceHandle->CreateUnorderedAccessView(bufferHandle, nullptr, &uavDesc, uavHandle);

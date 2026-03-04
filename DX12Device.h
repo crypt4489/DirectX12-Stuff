@@ -493,7 +493,7 @@ struct DX12Device
 
     EntryHandle CreateRootSignature(DX12RootSignatureCreate* createInfo, D3D12_ROOT_SIGNATURE_FLAGS flags);
 
-    void CreateSRVDescriptorHandle(EntryHandle bufferPoolHandle, UINT offset, UINT numCount, UINT size, DXGI_FORMAT format, DescriptorHeapManager* heap, UINT heapIndex, D3D12_SRV_DIMENSION dimension);
+    void CreateBufferSRVDescriptorHandle(EntryHandle bufferPoolHandle, UINT offset, UINT numCount, UINT size, DXGI_FORMAT format, DescriptorHeapManager* heap, UINT heapIndex, D3D12_SRV_DIMENSION dimension);
 
     EntryHandle CreateShaderBlob(const char* shaderfile);
 
@@ -502,7 +502,7 @@ struct DX12Device
 
     EntryHandle CreateTextureMemoryPool(size_t sizeOfPool, size_t alignment);
 
-    void CreateUAVDescriptorHandle(EntryHandle bufferPoolHandle, UINT offset, UINT numCount, UINT size, DXGI_FORMAT format, DescriptorHeapManager* heap, UINT heapIndex);
+    void CreateBufferUAVDescriptorHandle(EntryHandle bufferPoolHandle, UINT offset, UINT numCount, UINT size, UINT counterOffsetInBytes, DXGI_FORMAT format, DescriptorHeapManager* heap, UINT heapIndex, D3D12_BUFFER_UAV_FLAGS uavFlags);
 
     EntryHandle CreateDeviceBuffer(UINT size, DXGI_FORMAT format, D3D12_RESOURCE_FLAGS flags);
 
