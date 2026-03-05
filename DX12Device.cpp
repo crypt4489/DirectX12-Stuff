@@ -204,6 +204,12 @@ void* DX12Device::AllocFromDeviceCache(SIZE_T size, SIZE_T alignment)
 
     current = (current + alignment - 1) & ~(alignment - 1);
 
+    if ((current + size) >= 4096)
+    {
+        current = 0;
+        deviceCacheAlloc = 0;
+    }
+
     deviceCacheAlloc += (size + (current - deviceCacheAlloc));
 
     return (void*)(deviceCache + current);
@@ -1253,9 +1259,90 @@ ID3D12DescriptorHeap* DX12Device::GetDescriptorHeapFromManager(EntryHandle manag
 }
 
 
-UINT  DX12Device::GetDescriptorHeapSizeFromManager(EntryHandle managerIndex)
+UINT DX12Device::GetDescriptorHeapSizeFromManager(EntryHandle managerIndex)
 {
     DescriptorHeapManager* heapManager = (DescriptorHeapManager*)GetAndValidateItem(managerIndex, D12DESCRIPTORMANAGER);
 
     return heapManager->descriptorHeapHandleSize;
+}
+
+void PipelineObject::DrawObject(ID3D12GraphicsCommandList7* gCommandBuffer, UINT currentSet)
+{
+    ID3D12RootSignature* sign = (ID3D12RootSignature*)device->GetAndValidateItem(rootSignature, D12ROOTSIGNATURE);
+
+    gCommandBuffer->SetGraphicsRootSignature(sign);
+
+
+    ID3D12DescriptorHeap** heaps = (ID3D12DescriptorHeap**)device->AllocFromDeviceCache(sizeof(ID3D12DescriptorHeap*) * heapsCount, 4);
+
+    UINT* heapSizes = (UINT*)device->AllocFromDeviceCache(sizeof(UINT) * heapsCount, 4);
+
+    for (int j = 0; j < heapsCount; j++)
+    {
+        heaps[j] = (ID3D12DescriptorHeap*)device->GetDescriptorHeapFromManager(descriptorHeap[j]);
+        heapSizes[j] = device->GetDescriptorHeapSizeFromManager(descriptorHeap[j]);
+    }
+
+    gCommandBuffer->SetDescriptorHeaps(heapsCount, heaps);
+
+    ID3D12PipelineState* pipelineStateHandle = (ID3D12PipelineState*)device->GetAndValidateItem(pipelineState, D12PIPELINESTATE);
+
+    gCommandBuffer->SetPipelineState(pipelineStateHandle);
+    gCommandBuffer->IASetPrimitiveTopology(topology);
+
+    int rootOffset = cbvArgsCount;
+
+    for (int j = rootOffset; j < rootOffset + descriptorTableCount; j++)
+    {
+        int heapindex = descriptorHeapSelection[j];
+        DX12GPUDescriptorHandle handle = DX12GPUDescriptorHandle(heaps[heapindex]->GetGPUDescriptorHandleForHeapStart(), descriptorHeapPointer[j] + (currentSet * resourceCount[j]), heapSizes[heapindex]);
+        gCommandBuffer->SetGraphicsRootDescriptorTable(j, handle);
+    }
+
+    for (int j = 0; j < rootOffset; j++)
+    {
+        DX12ConstantBufferPipelineArguments* pipeArgs = &cbvArgs[j];
+        gCommandBuffer->SetGraphicsRoot32BitConstants(
+            pipeArgs->rootParamIndex,
+            pipeArgs->sizeInBytes / 4,
+            pipeArgs->data,
+            pipeArgs->offsetInBytes / 4
+        );
+    }
+
+
+    if (vertexBuffer != ~0ui64)
+    {
+        D3D12_VERTEX_BUFFER_VIEW vertexView{};
+
+        ID3D12Resource* vertexBufferHandle = (ID3D12Resource*)device->GetAndValidateItem(vertexBuffer, D12RESOURCEHANDLE);
+
+        vertexView.BufferLocation = vertexBufferHandle->GetGPUVirtualAddress() + vertexBufferOffset;
+        vertexView.SizeInBytes = (UINT)vertexBufferSize;
+        vertexView.StrideInBytes = vertexSize;
+
+        gCommandBuffer->IASetVertexBuffers(0, 1, &vertexView);
+    }
+
+    if (indexBuffer != ~0ui64)
+    {
+
+        D3D12_INDEX_BUFFER_VIEW indexView{};
+
+        ID3D12Resource* indexBufferHandle = (ID3D12Resource*)device->GetAndValidateItem(indexBuffer, D12RESOURCEHANDLE);
+
+        indexView.BufferLocation = indexBufferHandle->GetGPUVirtualAddress() + indexBufferOffset;
+        indexView.SizeInBytes = (UINT)indexBufferSize;
+        indexView.Format = (indexSize == 2) ? DXGI_FORMAT_R16_UINT : DXGI_FORMAT_R32_UINT;
+
+        gCommandBuffer->IASetIndexBuffer(&indexView);
+
+        gCommandBuffer->DrawIndexedInstanced(indexCount, instanceCount, 0, 0, 0);
+
+    }
+    else
+    {
+        gCommandBuffer->DrawInstanced(vertexCount, instanceCount, 0, 0);
+    }
+
 }

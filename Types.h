@@ -208,6 +208,7 @@ struct ShaderSetLayout
     int resourceStart;
     int samplerCount;
     int viewCount;
+    int constantsCount;
 };
 
 struct ShaderResource

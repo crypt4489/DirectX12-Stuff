@@ -3,7 +3,13 @@
 //dxc.exe -T ps_6_0 -E PixelShaderFunction basicvertex.hlsl -Fo PS.bin
 //dxc.exe -T vs_6_0 -E VertexMain basicvertex.hlsl -Fo VS.bin
 
-cbuffer RootConstants : register(b0)
+
+cbuffer ColorConstants : register(b0)
+{
+    float4 colorConstants;
+}
+
+cbuffer RootConstants : register(b1)
 {
     float4x4 world;
 }
@@ -63,5 +69,5 @@ struct PSInput
 float4 PixelShaderFunction(PSInput input) : SV_Target
 { 
     float2 outc = input.tex;
-    return myTexture.Sample(mySampler, outc);
+    return myTexture.Sample(mySampler, outc) * colorConstants;
 }

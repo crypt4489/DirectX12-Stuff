@@ -9,6 +9,8 @@
 
 typedef SIZE_T EntryHandle;
 
+struct DX12Device;
+
 enum DX12ComType
 {
     DXGISWAPCHAIN = 0,
@@ -26,6 +28,10 @@ enum DX12ComType
     D12IMAGEMEMORYPOOL = 12,
     D12BUFFERMEMORYPOOL = 13,
     D12DESCRIPTORMANAGER = 14,
+    D12PIPELINEOBJECT = 15,
+    D12COMMANDBUFFEROBJECT = 16,
+    D12SWAPCHAININSTANCE = 17,
+    D12IMAGEHANDLE = 18,
 };
 
 struct PoolItem
@@ -80,6 +86,52 @@ struct DescriptorHeapManager
     UINT descriptorHeapHandleSize;
 };
 
+struct DX12ConstantBufferPipelineArguments
+{
+    void* data;
+    UINT64 pad1;
+    UINT rootParamIndex;
+    UINT offsetInBytes;
+    UINT sizeInBytes;
+    UINT pad2;
+};
+
+
+struct DX12ImageHandle
+{
+    EntryHandle resourceIndex;
+    EntryHandle memHeapIndex;
+    UINT mipLevels;
+    UINT arrayCount;
+    DXGI_FORMAT format;
+};
+
+struct PipelineCreationInfo
+{
+    EntryHandle rootSignature;
+    EntryHandle pipelineState;
+    UINT heapsCounts;
+    EntryHandle* descriptorHeapHandles;
+    UINT descriptorTableCount;
+    UINT* descriptorTablePointerHead;
+    UINT* descriptorTableSizes;
+    UINT* descriptorHeapSelections;
+    D3D_PRIMITIVE_TOPOLOGY topology;
+    UINT instanceCount;
+    EntryHandle vertexBufferHandle;
+    SIZE_T vertexBufferOffset;
+    SIZE_T vertexBufferSize;
+    UINT vertexSize;
+    UINT vertexCount;
+    EntryHandle indexBuffer = ~0ui64;
+    SIZE_T indexBufferOffset;
+    SIZE_T indexBufferSize;
+    UINT indexSize;
+    UINT indexCount;
+    UINT cbvArgsCount;
+};
+
+
 struct PipelineObject
 {
     EntryHandle rootSignature;
@@ -103,54 +155,12 @@ struct PipelineObject
     SIZE_T indexBufferSize;
     int indexSize;
     int indexCount;
+    DX12ConstantBufferPipelineArguments cbvArgs[8];
+    int cbvArgsCount;
+    DX12Device* device;
 
+    void DrawObject(ID3D12GraphicsCommandList7* gCommandBuffer, UINT currentSet);
 };
-
-/*
-
- D3D12_ROOT_PARAMETER_TYPE
-    {
-        D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE	= 0,
-        D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS	= ( D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE + 1 ) ,
-        D3D12_ROOT_PARAMETER_TYPE_CBV	= ( D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS + 1 ) ,
-        D3D12_ROOT_PARAMETER_TYPE_SRV	= ( D3D12_ROOT_PARAMETER_TYPE_CBV + 1 ) ,
-        D3D12_ROOT_PARAMETER_TYPE_UAV	= ( D3D12_ROOT_PARAMETER_TYPE_SRV + 1 )
-    } 	D3D12_ROOT_PARAMETER_TYPE;
-
-    D3D12_DESCRIPTOR_RANGE_TYPE
-    {
-        D3D12_DESCRIPTOR_RANGE_TYPE_SRV	= 0,
-        D3D12_DESCRIPTOR_RANGE_TYPE_UAV	= ( D3D12_DESCRIPTOR_RANGE_TYPE_SRV + 1 ) ,
-        D3D12_DESCRIPTOR_RANGE_TYPE_CBV	= ( D3D12_DESCRIPTOR_RANGE_TYPE_UAV + 1 ) ,
-        D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER	= ( D3D12_DESCRIPTOR_RANGE_TYPE_CBV + 1 )
-    } 	D3D12_DESCRIPTOR_RANGE_TYPE;
-
-    D3D12_DESCRIPTOR_RANGE
-    {
-    D3D12_DESCRIPTOR_RANGE_TYPE RangeType;
-    UINT NumDescriptors;
-    UINT BaseShaderRegister;
-    UINT RegisterSpace;
-    UINT OffsetInDescriptorsFromTableStart;
-    } 	D3D12_DESCRIPTOR_RANGE;
-
-
-
-    D3D12_ROOT_CONSTANTS
-    {
-    UINT ShaderRegister;
-    UINT RegisterSpace;
-    UINT Num32BitValues;
-    } 	D3D12_ROOT_CONSTANTS;
-
-    D3D12_ROOT_DESCRIPTOR
-    {
-    UINT ShaderRegister;
-    UINT RegisterSpace;
-    } 	D3D12_ROOT_DESCRIPTOR;
-
-*/
-
 
 struct DX12PipelineStateObjectCreate
 {
