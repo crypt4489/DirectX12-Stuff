@@ -7,7 +7,7 @@
 		PS.bin
 	</HLSLShader>
 	<ShaderResourceSet>
-		<ShaderResourceItem type="uniform" used="v">
+		<ShaderResourceItem type="storage" used="v">
 		</ShaderResourceItem>
 		<ShaderResourceItem type="image2D" used="f" rw="read">
 		</ShaderResourceItem>
@@ -15,7 +15,7 @@
 		</ShaderResourceItem>
 	</ShaderResourceSet>
 	<ShaderResourceSet>
-		<ShaderResourceItem type="constantbuffer" used="v">
+		<ShaderResourceItem type="uniform" used="v">
 		</ShaderResourceItem>
 	</ShaderResourceSet>
 </ShaderGraph>

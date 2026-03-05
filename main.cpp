@@ -735,10 +735,10 @@ void DoSceneStuff()
     BindSamplerResourceToShaderResource(camSRVDS, &bgraImageMemoryPool, 1, 0, 2);
 
     int worldOne = AllocateShaderResourceSet(mainLayout, 1, MAX_FRAMES_IN_FLIGHT);
-    UploadConstant(worldOne, world1Data, 0);
+    BindBufferToShaderResource(worldOne, world1Data, 0, 0);
     
     int worldTwo = AllocateShaderResourceSet(mainLayout, 1, MAX_FRAMES_IN_FLIGHT);
-    UploadConstant(worldTwo, world2Data, 0);
+    BindBufferToShaderResource(worldTwo, world2Data, 0, 0);
 
     int basic1[2] = { camSRVDS, worldOne };
     int basic2[2] = { camSRVDS, worldTwo };
@@ -1215,7 +1215,7 @@ int Render()
             ID3D12Resource* indexBuffer = (ID3D12Resource*)deviceInstance.GetAndValidateItem(triangles[i].indexBuffer, D12RESOURCEHANDLE);
 
             indexView.BufferLocation = indexBuffer->GetGPUVirtualAddress() + triangles[i].indexBufferOffset;
-            indexView.SizeInBytes = triangles[i].indexBufferSize;
+            indexView.SizeInBytes = (UINT)triangles[i].indexBufferSize;
             indexView.Format = (triangles[i].indexSize == 2) ? DXGI_FORMAT_R16_UINT : DXGI_FORMAT_R32_UINT;
 
             gCommandBuffer->IASetIndexBuffer(&indexView);
@@ -1430,39 +1430,61 @@ EntryHandle CreateRootSignatureFromShaderGraph(ShaderGraph* graph)
 
     ShaderStageType* visibility = (ShaderStageType*)AllocFromTemp(sizeof(ShaderStageType) * numRootParameters, 4);
 
-    UINT samplerIndex = 0, srvIndex = 0, cbvIndex = 0, samplerRangeParameterIndex = numOfRanges-samplerCount;
+    UINT samplerIndex = 0, srvIndex = 0, cbvIndex = 0, uavIndex = 0, samplerRangeParameterIndex = numOfRanges-samplerCount;
 
 
     for (int i = 0; i < graph->resourceCount; i++)
     {
         ShaderResource* resource = (ShaderResource*)graph->GetResource(i);
 
+        int arrayCount = resource->arrayCount;
+
         switch (resource->type)
         {
-        case ShaderResourceType::CONSTANT_BUFFER:
-        {
-            ranges.AppendCBVRange(1, cbvIndex++, 0);
-            visibility[resource->set] |= resource->stages;
-            rangeCount[resource->set] += 1;
-            break;
-        }
         case ShaderResourceType::IMAGE2D:
         {
-            ranges.AppendSRVRange(1, srvIndex++, 0);
+            ranges.AppendSRVRange(arrayCount, srvIndex, 0);
+
+            srvIndex += arrayCount;
+
             rangeCount[resource->set] += 1;
             visibility[resource->set] |= resource->stages;
             break;
         }
         case ShaderResourceType::SAMPLERSTATE:
         {
-            ranges.CreateSamplerRange(samplerRangeParameterIndex++, 1, samplerIndex++, 0);
+            ranges.CreateSamplerRange(samplerRangeParameterIndex++, arrayCount, samplerIndex, 0);
+
+            samplerIndex += arrayCount;
+
             visibility[numRootParameters - 1] |= resource->stages;
             rangeCount[numRootParameters - 1] += 1;
             break;
         }
+        case ShaderResourceType::BUFFER_VIEW:
+        case ShaderResourceType::STORAGE_BUFFER:
+        {
+            if (resource->action == ShaderResourceAction::SHADERWRITE || resource->action == ShaderResourceAction::SHADERREADWRITE)
+            {
+                ranges.AppendUAVRange(arrayCount, uavIndex, 0);
+                uavIndex += arrayCount;
+            }
+            else
+            {
+                ranges.AppendSRVRange(arrayCount, srvIndex, 0);
+                srvIndex += arrayCount;
+            }
+
+            rangeCount[resource->set] += 1;
+            visibility[resource->set] |= resource->stages;
+            break;
+        }
         case ShaderResourceType::UNIFORM_BUFFER:
         {
-            ranges.AppendSRVRange(1, srvIndex++, 0);
+            ranges.AppendCBVRange(arrayCount,cbvIndex, 0);
+
+            cbvIndex += arrayCount;
+
             rangeCount[resource->set] += 1;
             visibility[resource->set] |= resource->stages;
             break;
@@ -1637,8 +1659,6 @@ void CreateTablesFromResourceSet(int* descriptorsets, int numDescriptorSet, Pipe
 
     DescriptorHeapManager* samplerHeap = (DescriptorHeapManager*)deviceInstance.GetAndValidateItem(mainSamplerDescriptorHeap, D12DESCRIPTORMANAGER);
 
-  //  DescriptorHeapManager* stageMainHeap = (DescriptorHeapManager*)deviceInstance.GetAndValidateItem(stagingSRVDescriptorHeap, D12DESCRIPTORMANAGER);
-
     DescriptorHeapManager* stageSamplerHeap = (DescriptorHeapManager*)deviceInstance.GetAndValidateItem(stagingSamplerDescriptorHeap, D12DESCRIPTORMANAGER);
 
     int samplerIndex = stageSamplerHeap->descriptorHeapHandlePointer;
@@ -1651,15 +1671,17 @@ void CreateTablesFromResourceSet(int* descriptorsets, int numDescriptorSet, Pipe
 
         obj->descriptorHeapSelection[i] = 0;
 
+        uintptr_t head = descriptorSets[descriptorid];
+        ShaderResourceSet* set = (ShaderResourceSet*)head;
+
         if (srvDescriptorTablesStart[descriptorid] != -1)
         {
             obj->descriptorHeapPointer[i] = srvDescriptorTablesStart[descriptorid];
-            obj->resourceCount[i] = srvDescriptorTablesCounts[descriptorid];
+            obj->resourceCount[i] = set->viewCount;
             continue;
         }
 
-        uintptr_t head = descriptorSets[descriptorid];
-        ShaderResourceSet* set = (ShaderResourceSet*)head;
+
         uintptr_t* offsets = (uintptr_t*)(head + sizeof(ShaderResourceSet));
 
         int count = set->bindingCount;
@@ -1672,55 +1694,46 @@ void CreateTablesFromResourceSet(int* descriptorsets, int numDescriptorSet, Pipe
 
         int bufferCounts = set->viewCount;
 
-        for (int i = 0; i < count; i++)
+        samplerCount += set->samplerCount;
+
+        for (int g = 0; g < count; g++)
         {
-            ShaderResourceHeader* header = (ShaderResourceHeader*)offsets[i];
+            ShaderResourceHeader* header = (ShaderResourceHeader*)offsets[g];
+
+            int arrayCount = header->arrayCount;
 
             switch (header->type)
             {
             case ShaderResourceType::IMAGE2D:
             {
                 ShaderResourceImage* image = (ShaderResourceImage*)header;
+
                 for (int j = 0; j < numberOfTables; j++)
                 {
-                    deviceInstance.CreateImageSRVDescriptorHandle(image->textureHandles[0],
-                        1, DXGI_FORMAT_B8G8R8A8_UNORM_SRGB, mainHeap, mainHeapIndex + (j * bufferCounts), D3D12_SRV_DIMENSION_TEXTURE2D
-                    );
+                    for (int h = 0; h < arrayCount; h++)
+                    {
+                        deviceInstance.CreateImageSRVDescriptorHandle(image->textureHandles[h],
+                            1, DXGI_FORMAT_B8G8R8A8_UNORM_SRGB, mainHeap, mainHeapIndex + (j * bufferCounts) + h, D3D12_SRV_DIMENSION_TEXTURE2D
+                        );
+                    }
+
                 }
-                mainHeapIndex++;
+                mainHeapIndex += arrayCount;
                 break;
             }
             case ShaderResourceType::SAMPLERSTATE:
             {
                 ShaderResourceSampler* image = (ShaderResourceSampler*)header;
                 deviceInstance.CreateImageSampler(stageSamplerHeap, samplerIndex++);
-                samplerCount++;
                 break;
             }
-
+            case ShaderResourceType::CONSTANT_BUFFER:
             case ShaderResourceType::SAMPLER3D:
             case ShaderResourceType::SAMPLER2D:
             case ShaderResourceType::SAMPLERCUBE:
             {
                 printf("Unimplemented! %d\n", header->type);
 
-                break;
-            }
-            case ShaderResourceType::CONSTANT_BUFFER:
-            {
-                ShaderResourceConstantBuffer* buffer = (ShaderResourceConstantBuffer*)header;
-
-                RenderAllocation* alloc = &allocationHandle[buffer->allocationIndex];
-
-                size_t stride = (alloc->requestedSize + alloc->alignment - 1) & ~(alloc->alignment - 1);
-
-                stride *= alloc->structureCopies;
- 
-                for (int j = 0; j < numberOfTables; j++)
-                {
-                    deviceInstance.CreateCBVDescriptorHandle(alloc->memIndex, j * stride + alloc->offset, stride, mainHeap, mainHeapIndex + (j * bufferCounts));
-                }
-                mainHeapIndex++;
                 break;
             }
 
@@ -1732,41 +1745,42 @@ void CreateTablesFromResourceSet(int* descriptorsets, int numDescriptorSet, Pipe
 
                 for (int j = 0; j < numberOfTables; j++)
                 {
-                    if (buffer->action == ShaderResourceAction::SHADERWRITE || buffer->action == ShaderResourceAction::SHADERWRITE)
+                    for (int h = 0; h < arrayCount; h++)
                     {
-                        deviceInstance.CreateBufferUAVDescriptorHandle
-                        (
-                            alloc->memIndex,
-                            j * (stride * alloc->structureCopies) + alloc->offset,
-                            alloc->structureCopies,
-                            stride,
-                            0,
-                            ConvertComponentFormatToDXGIFormat(alloc->formatType),
-
-                            mainHeap,
-                            mainHeapIndex + (j * bufferCounts),
-                            D3D12_BUFFER_UAV_FLAG_NONE
-                        );
-                    }
-                    else
-                    {
-                        deviceInstance.CreateBufferSRVDescriptorHandle
-                        (
-                            alloc->memIndex,
-                            j * (stride * alloc->structureCopies) + alloc->offset,
-                            alloc->structureCopies,
-                            stride,
-                            ConvertComponentFormatToDXGIFormat(alloc->formatType),
-                            mainHeap,
-                            mainHeapIndex + (j * bufferCounts),
-                            D3D12_SRV_DIMENSION_BUFFER
-                        );
+                        if (buffer->action == ShaderResourceAction::SHADERWRITE || buffer->action == ShaderResourceAction::SHADERWRITE)
+                        {
+                            deviceInstance.CreateBufferUAVDescriptorHandle
+                            (
+                                alloc->memIndex,
+                                j * (stride * alloc->structureCopies) + alloc->offset,
+                                alloc->structureCopies,
+                                stride,
+                                0,
+                                ConvertComponentFormatToDXGIFormat(alloc->formatType),
+                                mainHeap,
+                                mainHeapIndex + (j * bufferCounts) + h,
+                                D3D12_BUFFER_UAV_FLAG_NONE
+                            );
+                        }
+                        else
+                        {
+                            deviceInstance.CreateBufferSRVDescriptorHandle
+                            (
+                                alloc->memIndex,
+                                j * (stride * alloc->structureCopies) + alloc->offset,
+                                alloc->structureCopies,
+                                stride,
+                                ConvertComponentFormatToDXGIFormat(alloc->formatType),
+                                mainHeap,
+                                mainHeapIndex + (j * bufferCounts) + h,
+                                D3D12_SRV_DIMENSION_BUFFER
+                            );
+                        }
                     }
                 }
 
-                mainHeapIndex++;
 
-
+                mainHeapIndex += arrayCount;
                 break;
             }
             case ShaderResourceType::UNIFORM_BUFFER:
@@ -1779,21 +1793,20 @@ void CreateTablesFromResourceSet(int* descriptorsets, int numDescriptorSet, Pipe
 
                 for (int j = 0; j < numberOfTables; j++)
                 {
-
-                    deviceInstance.CreateBufferSRVDescriptorHandle
-                    (
-                        alloc->memIndex,
-                        j * (stride * alloc->structureCopies) + alloc->offset,
-                        alloc->structureCopies,
-                        stride,
-                        ConvertComponentFormatToDXGIFormat(alloc->formatType),
-                        mainHeap,
-                        mainHeapIndex + (j * bufferCounts),
-                        D3D12_SRV_DIMENSION_BUFFER
-                    );
+                    for (int h = 0; h < arrayCount; h++)
+                    {
+                        deviceInstance.CreateCBVDescriptorHandle
+                        (
+                            alloc->memIndex,
+                            j * (stride * alloc->structureCopies) + alloc->offset,
+                            stride,
+                            mainHeap,
+                            mainHeapIndex + (j * bufferCounts) + h
+                        );
+                    }
                 }
 
-                mainHeapIndex++;
+                mainHeapIndex += arrayCount;
 
                 break;
             }
@@ -1809,49 +1822,53 @@ void CreateTablesFromResourceSet(int* descriptorsets, int numDescriptorSet, Pipe
 
                 for (int j = 0; j < numberOfTables; j++)
                 {
-                    if (bufferView->action == ShaderResourceAction::SHADERWRITE || bufferView->action == ShaderResourceAction::SHADERWRITE)
-                    {
-                        deviceInstance.CreateBufferUAVDescriptorHandle
-                        (
-                            alloc->memIndex,
-                            j* (stride* alloc->structureCopies) + alloc->offset,
-                            alloc->structureCopies,
-                            stride,
-                            0,
-                            ConvertComponentFormatToDXGIFormat(alloc->formatType),
 
-                            mainHeap,
-                            mainHeapIndex + (j * bufferCounts),
-                            D3D12_BUFFER_UAV_FLAG_NONE
-                        );
-                    }
-                    else
+                    for (int h = 0; h < arrayCount; h++)
                     {
-                        deviceInstance.CreateBufferSRVDescriptorHandle
-                        (
-                            alloc->memIndex,
-                            j * (stride * alloc->structureCopies) + alloc->offset,
-                            alloc->structureCopies,
-                            stride,
-                            ConvertComponentFormatToDXGIFormat(alloc->formatType),
-                            mainHeap,
-                            mainHeapIndex + (j * bufferCounts),
-                            D3D12_SRV_DIMENSION_BUFFER
-                        );
+                        if (bufferView->action == ShaderResourceAction::SHADERWRITE || bufferView->action == ShaderResourceAction::SHADERWRITE)
+                        {
+                            deviceInstance.CreateBufferUAVDescriptorHandle
+                            (
+                                alloc->memIndex,
+                                j * (stride * alloc->structureCopies) + alloc->offset,
+                                alloc->structureCopies,
+                                stride,
+                                0,
+                                ConvertComponentFormatToDXGIFormat(alloc->formatType),
+                                mainHeap,
+                                mainHeapIndex + (j * bufferCounts) + h,
+                                D3D12_BUFFER_UAV_FLAG_NONE
+                            );
+                        }
+                        else
+                        {
+                            deviceInstance.CreateBufferSRVDescriptorHandle
+                            (
+                                alloc->memIndex,
+                                j * (stride * alloc->structureCopies) + alloc->offset,
+                                alloc->structureCopies,
+                                stride,
+                                ConvertComponentFormatToDXGIFormat(alloc->formatType),
+                                mainHeap,
+                                mainHeapIndex + (j * bufferCounts) + h,
+                                D3D12_SRV_DIMENSION_BUFFER
+                            );
+                        }
                     }
+
+
                 }
-
-                mainHeapIndex++;
-
-
-                break;
             }
+
+            mainHeapIndex += arrayCount;
+
+
+            break;
             }
         }
 
-
         obj->descriptorHeapPointer[i] = srvDescriptorTablesStart[descriptorid] = mainHeap->descriptorHeapHandlePointer;
-        obj->resourceCount[i] = srvDescriptorTablesCounts[descriptorid] = bufferCounts;
+        obj->resourceCount[i] = bufferCounts;
 
         mainHeap->descriptorHeapHandlePointer += (bufferCounts * numberOfTables);
     }
@@ -2058,11 +2075,11 @@ ShaderGraph* CreateShaderGraph(
 
             if (tag->resourceType == ShaderResourceType::SAMPLERSTATE)
             {
-                setLay->samplerCount++;
+                setLay->samplerCount += tag->arrayCount;
             }
             else
             {
-                setLay->viewCount++;
+                setLay->viewCount += tag->arrayCount;
             }
 
             resource->stages = tag->shaderstage;

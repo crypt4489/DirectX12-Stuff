@@ -7,7 +7,7 @@
 #include <dxgidebug.h>
 
 
-typedef size_t EntryHandle;
+typedef SIZE_T EntryHandle;
 
 enum DX12ComType
 {
@@ -45,16 +45,16 @@ struct D12Fence
 struct ImageMemoryPool
 {
     EntryHandle heap;
-    size_t currentPointer;
-    size_t sizeOfHeap;
-    size_t alignment;
+    SIZE_T currentPointer;
+    SIZE_T sizeOfHeap;
+    SIZE_T alignment;
 };
 
 struct DriverMemoryBuffer
 {
     EntryHandle bufferHandle;
-    size_t sizeOfAlloc;
-    size_t currentPointer;
+    SIZE_T sizeOfAlloc;
+    SIZE_T currentPointer;
     D3D12_RESOURCE_STATES currentState;
     D3D12_RESOURCE_STATES initialState;
 };
@@ -417,18 +417,18 @@ struct DX12Device
 
     EntryHandle handlesPointer = 0;
 
-    size_t deviceDataAlloc = 0;
+    SIZE_T deviceDataAlloc = 0;
 
-    size_t deviceCacheAlloc = 0;
+    SIZE_T deviceCacheAlloc = 0;
 
 
     EntryHandle AllocTypeForEntry(void* data, DX12ComType type);
 
-    void* AllocFromDeviceCache(size_t size, size_t alignment);
+    void* AllocFromDeviceCache(SIZE_T size, SIZE_T alignment);
 
-    void* AllocFromDeviceStorage(size_t size, size_t alignment);
+    void* AllocFromDeviceStorage(SIZE_T size, SIZE_T alignment);
 
-    size_t AllocFromDriverMemoryBuffer(EntryHandle bufferPoolIndex, size_t allocSize, size_t alignment);
+    SIZE_T AllocFromDriverMemoryBuffer(EntryHandle bufferPoolIndex, SIZE_T allocSize, SIZE_T alignment);
 
     bool CheckTearingSupport();
 
@@ -445,7 +445,7 @@ struct DX12Device
     IDXGIAdapter4* GetAdapter(UINT createFactoryFlags);
 
 
-    ID3D12Resource* CreateBuffer(ID3D12Device2* device, UINT size, DXGI_FORMAT format, D3D12_RESOURCE_FLAGS flags, D3D12_HEAP_TYPE heapType);
+    ID3D12Resource* CreateBuffer(ID3D12Device2* device, SIZE_T size, DXGI_FORMAT format, D3D12_RESOURCE_FLAGS flags, D3D12_HEAP_TYPE heapType);
 
     ID3D12CommandAllocator* CreateCommandAllocator(ID3D12Device2* device, D3D12_COMMAND_LIST_TYPE type);
     EntryHandle CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE type);
@@ -459,9 +459,9 @@ struct DX12Device
 
     EntryHandle CreateCommittedImageResource(UINT width, UINT height, UINT depth, UINT mips, D3D12_RESOURCE_FLAGS flags, DXGI_FORMAT format, D3D12_RESOURCE_DIMENSION dimension);
 
-    void CreateCBVDescriptorHandle(EntryHandle bufferPoolHandle, UINT offset, UINT size, DescriptorHeapManager* heap, UINT heapIndex);
+    void CreateCBVDescriptorHandle(EntryHandle bufferPoolHandle, SIZE_T offset, SIZE_T size, DescriptorHeapManager* heap, UINT heapIndex);
 
-    EntryHandle CreateDSVRSVMemoryPool(size_t sizeOfPool, size_t alignment, bool msaa);
+    EntryHandle CreateDSVRSVMemoryPool(SIZE_T sizeOfPool, SIZE_T alignment, bool msaa);
 
     ID3D12DescriptorHeap* CreateDescriptorHeap(ID3D12Device2* device, D3D12_DESCRIPTOR_HEAP_TYPE type, int numDescriptors, D3D12_DESCRIPTOR_HEAP_FLAGS flags, UINT* descriptorSize);
     EntryHandle CreateDescriptorHeap(D3D12_DESCRIPTOR_HEAP_TYPE type, int numDescriptors, D3D12_DESCRIPTOR_HEAP_FLAGS flags, UINT* descriptorSize);
@@ -483,7 +483,7 @@ struct DX12Device
 
     void CreateImageSRVDescriptorHandle(EntryHandle bufferPoolHandle, UINT mipsLevels, DXGI_FORMAT format, DescriptorHeapManager* heap, UINT heapIndex, D3D12_SRV_DIMENSION dimension);
 
-    EntryHandle CreateImageMemoryPool(size_t sizeOfPool, size_t alignment, D3D12_HEAP_FLAGS heapFlags, D3D12_HEAP_TYPE heapType);
+    EntryHandle CreateImageMemoryPool(SIZE_T sizeOfPool, SIZE_T alignment, D3D12_HEAP_FLAGS heapFlags, D3D12_HEAP_TYPE heapType);
 
     EntryHandle CreateImageResourceFromPool(EntryHandle poolIdx, UINT width, UINT height, UINT depth, UINT mips, D3D12_RESOURCE_FLAGS flags, DXGI_FORMAT format, D3D12_RESOURCE_DIMENSION dimension);
 
@@ -493,16 +493,16 @@ struct DX12Device
 
     EntryHandle CreateRootSignature(DX12RootSignatureCreate* createInfo, D3D12_ROOT_SIGNATURE_FLAGS flags);
 
-    void CreateBufferSRVDescriptorHandle(EntryHandle bufferPoolHandle, UINT offset, UINT numCount, UINT size, DXGI_FORMAT format, DescriptorHeapManager* heap, UINT heapIndex, D3D12_SRV_DIMENSION dimension);
+    void CreateBufferSRVDescriptorHandle(EntryHandle bufferPoolHandle, SIZE_T  offset, UINT numCount, SIZE_T size, DXGI_FORMAT format, DescriptorHeapManager* heap, UINT heapIndex, D3D12_SRV_DIMENSION dimension);
 
     EntryHandle CreateShaderBlob(const char* shaderfile);
 
     IDXGISwapChain4* CreateSwapChain(HWND hWnd, ID3D12CommandQueue* commandQueue, int width, int height, int bufferCount, DXGI_FORMAT format, UINT debug);
     EntryHandle CreateSwapChain(HWND hWnd, EntryHandle commandQueue, int width, int height, int bufferCount, DXGI_FORMAT format, UINT debug);
 
-    EntryHandle CreateTextureMemoryPool(size_t sizeOfPool, size_t alignment);
+    EntryHandle CreateTextureMemoryPool(SIZE_T sizeOfPool, SIZE_T alignment);
 
-    void CreateBufferUAVDescriptorHandle(EntryHandle bufferPoolHandle, UINT offset, UINT numCount, UINT size, UINT counterOffsetInBytes, DXGI_FORMAT format, DescriptorHeapManager* heap, UINT heapIndex, D3D12_BUFFER_UAV_FLAGS uavFlags);
+    void CreateBufferUAVDescriptorHandle(EntryHandle bufferPoolHandle, SIZE_T  offset, UINT numCount, SIZE_T size,SIZE_T  counterOffsetInBytes, DXGI_FORMAT format, DescriptorHeapManager* heap, UINT heapIndex, D3D12_BUFFER_UAV_FLAGS uavFlags);
 
     EntryHandle CreateDeviceBuffer(UINT size, DXGI_FORMAT format, D3D12_RESOURCE_FLAGS flags);
 
@@ -530,9 +530,9 @@ struct DX12Device
 
     void WaitForFenceValue(EntryHandle fenceObjIndex, uint64_t fenceValue, DWORD duration);
 
-    void WriteToDeviceLocalMemory(EntryHandle deviceLocalMemBuffer, EntryHandle stagingBufferIndex, EntryHandle transferCommandBuffer, void* data, size_t size, size_t offset, size_t stride, int copies);
+    void WriteToDeviceLocalMemory(EntryHandle deviceLocalMemBuffer, EntryHandle stagingBufferIndex, EntryHandle transferCommandBuffer, void* data, SIZE_T size, SIZE_T offset, SIZE_T stride, int copies);
 
-    void WriteToHostMemory(EntryHandle memoryBuffer, void* data, size_t size, size_t offset, size_t stride, int copies);
+    void WriteToHostMemory(EntryHandle memoryBuffer, void* data, SIZE_T size, SIZE_T offset, SIZE_T stride, int copies);
 
     void WriteToImageDeviceLocalMemory(EntryHandle imageResourceHandle, EntryHandle commandBufferIndex, EntryHandle stagingBufferIndex, char* data,
         UINT width, UINT height,

@@ -187,9 +187,9 @@ ID3D12Resource* DX12Device::GetResourceHandleForMemoryBuffer(EntryHandle memoryB
     return (ID3D12Resource*)GetAndValidateItem(memBuffer->bufferHandle, D12RESOURCEHANDLE);
 }
 
-void* DX12Device::AllocFromDeviceStorage(size_t size, size_t alignment)
+void* DX12Device::AllocFromDeviceStorage(SIZE_T size, SIZE_T alignment)
 {
-    size_t current = deviceDataAlloc;
+    SIZE_T current = deviceDataAlloc;
 
     current = (current + alignment - 1) & ~(alignment - 1);
 
@@ -198,9 +198,9 @@ void* DX12Device::AllocFromDeviceStorage(size_t size, size_t alignment)
     return (void*)(deviceData + current);
 }
 
-void* DX12Device::AllocFromDeviceCache(size_t size, size_t alignment)
+void* DX12Device::AllocFromDeviceCache(SIZE_T size, SIZE_T alignment)
 {
-    size_t current = deviceCacheAlloc;
+    SIZE_T current = deviceCacheAlloc;
 
     current = (current + alignment - 1) & ~(alignment - 1);
 
@@ -211,7 +211,7 @@ void* DX12Device::AllocFromDeviceCache(size_t size, size_t alignment)
 
 void  DX12Device::ReleaseAllDriverCOMHandles()
 {
-    for (size_t i = 0; i < handlesPointer; ++i)
+    for (SIZE_T i = 0; i < handlesPointer; ++i)
     {
 
         uintptr_t rawPtr = deviceHandlePool[i].memoryHandle;
@@ -360,7 +360,7 @@ ID3D12Heap* DX12Device::CreateDX12Heap(SIZE_T size, SIZE_T alignment, D3D12_HEAP
     return heap;
 }
 
-EntryHandle DX12Device::CreateImageMemoryPool(size_t sizeOfPool, size_t alignment, D3D12_HEAP_FLAGS heapFlags, D3D12_HEAP_TYPE heapType)
+EntryHandle DX12Device::CreateImageMemoryPool(SIZE_T sizeOfPool, SIZE_T alignment, D3D12_HEAP_FLAGS heapFlags, D3D12_HEAP_TYPE heapType)
 {
     ImageMemoryPool* pool = (ImageMemoryPool*)AllocFromDeviceStorage(sizeof(ImageMemoryPool), 4);
 
@@ -376,14 +376,14 @@ EntryHandle DX12Device::CreateImageMemoryPool(size_t sizeOfPool, size_t alignmen
     return ret;
 }
 
-EntryHandle DX12Device::CreateTextureMemoryPool(size_t sizeOfPool, size_t alignment)
+EntryHandle DX12Device::CreateTextureMemoryPool(SIZE_T sizeOfPool, SIZE_T alignment)
 {
     alignment = (alignment + D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT - 1) & ~(D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT - 1);
 
     return CreateImageMemoryPool(sizeOfPool, alignment, D3D12_HEAP_FLAG_ALLOW_ONLY_NON_RT_DS_TEXTURES, D3D12_HEAP_TYPE_DEFAULT);
 }
 
-EntryHandle DX12Device::CreateDSVRSVMemoryPool(size_t sizeOfPool, size_t alignment, bool msaa)
+EntryHandle DX12Device::CreateDSVRSVMemoryPool(SIZE_T sizeOfPool, SIZE_T alignment, bool msaa)
 {
     if (msaa)
     {
@@ -768,7 +768,7 @@ EntryHandle DX12Device::CreateDeviceBuffer(UINT size, DXGI_FORMAT format, D3D12_
 
 }
 
-ID3D12Resource* DX12Device::CreateBuffer(ID3D12Device2* device, UINT size, DXGI_FORMAT format, D3D12_RESOURCE_FLAGS flags, D3D12_HEAP_TYPE heapType)
+ID3D12Resource* DX12Device::CreateBuffer(ID3D12Device2* device, SIZE_T size, DXGI_FORMAT format, D3D12_RESOURCE_FLAGS flags, D3D12_HEAP_TYPE heapType)
 {
     D3D12_RESOURCE_DESC bufferDesc = {};
     bufferDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
@@ -802,12 +802,12 @@ ID3D12Resource* DX12Device::CreateBuffer(ID3D12Device2* device, UINT size, DXGI_
     return buffer;
 }
 
-size_t DX12Device::AllocFromDriverMemoryBuffer(EntryHandle bufferPoolIndex, size_t allocSize, size_t alignment)
+SIZE_T DX12Device::AllocFromDriverMemoryBuffer(EntryHandle bufferPoolIndex, SIZE_T allocSize, SIZE_T alignment)
 {
     DriverMemoryBuffer* dmb = (DriverMemoryBuffer*)GetAndValidateItem(bufferPoolIndex, D12BUFFERMEMORYPOOL);
 
-    size_t current = dmb->currentPointer;
-    size_t start = current;
+    SIZE_T current = dmb->currentPointer;
+    SIZE_T start = current;
 
     current = (current + alignment - 1) & ~(alignment - 1);
 
@@ -837,7 +837,7 @@ void DX12Device::ExecuteCommandListsOnQueue(EntryHandle queueIndex, ID3D12Comman
     lQueueHandle->ExecuteCommandLists(numOfLists, lists);
 }
 
-void DX12Device::WriteToHostMemory(EntryHandle memoryBuffer, void* data, size_t size, size_t offset, size_t stride, int copies)
+void DX12Device::WriteToHostMemory(EntryHandle memoryBuffer, void* data, SIZE_T size, SIZE_T offset, SIZE_T stride, int copies)
 {
     void* mappedData = nullptr;
 
@@ -858,7 +858,7 @@ void DX12Device::WriteToHostMemory(EntryHandle memoryBuffer, void* data, size_t 
     buffer->Unmap(0, nullptr);
 }
 
-void DX12Device::WriteToDeviceLocalMemory(EntryHandle deviceLocalMemBuffer, EntryHandle stagingBufferIndex, EntryHandle transferCommandBuffer, void* data, size_t size, size_t offset, size_t stride, int copies)
+void DX12Device::WriteToDeviceLocalMemory(EntryHandle deviceLocalMemBuffer, EntryHandle stagingBufferIndex, EntryHandle transferCommandBuffer, void* data, SIZE_T size, SIZE_T offset, SIZE_T stride, int copies)
 {
     ID3D12GraphicsCommandList7* transCommandBuffer = (ID3D12GraphicsCommandList7*)GetAndValidateItem(transferCommandBuffer, D12COMMANDBUFFER7);
 
@@ -872,7 +872,7 @@ void DX12Device::WriteToDeviceLocalMemory(EntryHandle deviceLocalMemBuffer, Entr
 
     void* mappedData = nullptr;
 
-    size_t allocLoc = AllocFromDriverMemoryBuffer(stagingBufferIndex, stride * copies, 64);
+    SIZE_T allocLoc = AllocFromDriverMemoryBuffer(stagingBufferIndex, stride * copies, 64);
 
     stagingBuffer->Map(0, nullptr, &mappedData);
 
@@ -952,7 +952,7 @@ void DX12Device::WriteToImageDeviceLocalMemory(EntryHandle imageResourceHandle, 
 
     DriverMemoryBuffer* dmb = (DriverMemoryBuffer*)GetAndValidateItem(stagingBufferIndex, D12BUFFERMEMORYPOOL);
 
-    size_t allocLoc = AllocFromDriverMemoryBuffer(stagingBufferIndex, stride * height, 255);
+    SIZE_T allocLoc = AllocFromDriverMemoryBuffer(stagingBufferIndex, stride * height, 255);
 
     ID3D12Resource* stagingBuffer = (ID3D12Resource*)GetAndValidateItem(dmb->bufferHandle, D12RESOURCEHANDLE);
 
@@ -1165,10 +1165,10 @@ void DX12Device::CreateImageSRVDescriptorHandle(EntryHandle bufferPoolHandle, UI
 
 }
 
-void DX12Device::CreateBufferSRVDescriptorHandle(EntryHandle bufferPoolHandle, UINT offset, UINT numCount, UINT size, DXGI_FORMAT format, DescriptorHeapManager* heap, UINT heapIndex, D3D12_SRV_DIMENSION dimension)
+void DX12Device::CreateBufferSRVDescriptorHandle(EntryHandle bufferPoolHandle, SIZE_T  offset, UINT numCount, SIZE_T size, DXGI_FORMAT format, DescriptorHeapManager* heap, UINT heapIndex, D3D12_SRV_DIMENSION dimension)
 {
 
-    UINT firstElement = offset / size;
+    UINT firstElement = (UINT)(offset / size);
 
     ID3D12Resource* bufferHandle = GetResourceHandleForMemoryBuffer(bufferPoolHandle);
 
@@ -1181,7 +1181,7 @@ void DX12Device::CreateBufferSRVDescriptorHandle(EntryHandle bufferPoolHandle, U
     srvDesc.Format = format; // structured buffer
     srvDesc.Buffer.FirstElement = firstElement;
     srvDesc.Buffer.NumElements = numCount;
-    srvDesc.Buffer.StructureByteStride = size;
+    srvDesc.Buffer.StructureByteStride = (UINT)size;
     srvDesc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
     srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
 
@@ -1189,10 +1189,10 @@ void DX12Device::CreateBufferSRVDescriptorHandle(EntryHandle bufferPoolHandle, U
 
 }
 
-void DX12Device::CreateBufferUAVDescriptorHandle(EntryHandle bufferPoolHandle, UINT offset, UINT numCount, UINT size, UINT counterOffsetInBytes, DXGI_FORMAT format, DescriptorHeapManager* heap, UINT heapIndex, D3D12_BUFFER_UAV_FLAGS uavFlags)
+void DX12Device::CreateBufferUAVDescriptorHandle(EntryHandle bufferPoolHandle, SIZE_T offset, UINT numCount, SIZE_T size, SIZE_T counterOffsetInBytes, DXGI_FORMAT format, DescriptorHeapManager* heap, UINT heapIndex, D3D12_BUFFER_UAV_FLAGS uavFlags)
 {
 
-    UINT firstElement = offset / size;
+    UINT firstElement = (UINT)(offset / size);
 
     ID3D12Resource* bufferHandle = GetResourceHandleForMemoryBuffer(bufferPoolHandle);
 
@@ -1207,7 +1207,7 @@ void DX12Device::CreateBufferUAVDescriptorHandle(EntryHandle bufferPoolHandle, U
     uavDesc.Format = format; // structured buffer
     uavDesc.Buffer.FirstElement = firstElement;
     uavDesc.Buffer.NumElements = numCount;
-    uavDesc.Buffer.StructureByteStride = size;
+    uavDesc.Buffer.StructureByteStride = (UINT)size;
     uavDesc.Buffer.Flags = uavFlags;
     uavDesc.Buffer.CounterOffsetInBytes = counterOffsetInBytes ;
 
@@ -1216,7 +1216,7 @@ void DX12Device::CreateBufferUAVDescriptorHandle(EntryHandle bufferPoolHandle, U
 
 }
 
-void DX12Device::CreateCBVDescriptorHandle(EntryHandle bufferPoolHandle, UINT offset, UINT size, DescriptorHeapManager* heap, UINT heapIndex)
+void DX12Device::CreateCBVDescriptorHandle(EntryHandle bufferPoolHandle, SIZE_T offset, SIZE_T size, DescriptorHeapManager* heap, UINT heapIndex)
 {
     ID3D12DescriptorHeap* cbvDescriptor = (ID3D12DescriptorHeap*)GetAndValidateItem(heap->descriptorHeap, D12DESCRIPTORHEAP);
 
@@ -1227,7 +1227,7 @@ void DX12Device::CreateCBVDescriptorHandle(EntryHandle bufferPoolHandle, UINT of
     D3D12_CONSTANT_BUFFER_VIEW_DESC cbvDesc = {};
 
     cbvDesc.BufferLocation = bufferHandle->GetGPUVirtualAddress() + offset;
-    cbvDesc.SizeInBytes = (size + (255)) & ~255;
+    cbvDesc.SizeInBytes = ((UINT)size + (255)) & ~255;
 
     deviceHandle->CreateConstantBufferView(&cbvDesc, cbvHandle);
 }

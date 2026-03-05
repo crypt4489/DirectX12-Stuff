@@ -273,7 +273,6 @@ struct ShaderResourceConstantBuffer : public ShaderResourceHeader
     int size;
     int offset;
     void* data;
-    int allocationIndex;
 };
 
 struct ShaderComputeLayout
@@ -1220,7 +1219,7 @@ constexpr std::array<int, 50> makeArray(int val) {
 }
 
 std::array<int, 50> srvDescriptorTablesStart = makeArray(-1);
-std::array<int, 50> srvDescriptorTablesCounts = makeArray(-1);
+
 
 void BindBufferToShaderResource(int descriptorSet, int allocationIndex, int bindingIndex, int offset)
 {
@@ -1457,13 +1456,6 @@ void UploadConstant(int descriptorset, void* data, int bufferLocation)
     ShaderResourceConstantBuffer* header = (ShaderResourceConstantBuffer*)GetConstantBuffer(descriptorset, bufferLocation);
     if (!header) return;
     header->data = data;
-}
-
-void UploadConstant(int descriptorset, int allocationIndex, int bufferLocation)
-{
-    ShaderResourceConstantBuffer* header = (ShaderResourceConstantBuffer*)GetConstantBuffer(descriptorset, bufferLocation);
-    if (!header) return;
-    header->allocationIndex = allocationIndex;
 }
 
 int AllocateShaderResourceSet(ShaderGraph* graph, uint32_t targetSet, int setCount)
