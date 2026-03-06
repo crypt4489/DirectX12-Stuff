@@ -501,7 +501,7 @@ void WriteToImageDeviceLocalMemory(EntryHandle imageHandle, char* data, UINT wid
 
 EntryHandle CreateRootSignatureFromShaderGraph(ShaderGraph* graph);
 
-int CreateCBVArgsFromResourceSet(int descriptorid, int rootParamId, PipelineObject* obj, int cbvArgsPtr);
+int CreateCBVArgsFromResourceSet(int descriptorid, int rootParamId, DX12ConstantBufferPipelineArguments* args);
 
 struct Camera
 {
@@ -516,8 +516,7 @@ Camera cam;
 
 EntryHandle CreatePipelineStateObject(EntryHandle rootSignature, ShaderHandles* handles, int shaderCount, GenericPipelineStateInfo* stateInfo);
 
-PipelineObject triangles[2];
-
+EntryHandle CreateGraphicsPipelineObject(int* descriptorsets, int descCount, DX12PipelineCreationInfo* info);
 
 EntryHandle hostBuffer{};
 EntryHandle deviceLocalBuffer{};
@@ -543,7 +542,7 @@ static int allocationHandleIndex = 0;
 
 RenderAllocation allocationHandle[50];
 
-void CreateTablesFromResourceSet(int* descriptorsets, int numDescriptorSet, int rootParamOffset, PipelineObject* obj);
+int CreateTablesFromResourceSet(int* descriptorsets, int numDescriptorSet, int rootParamOffset, DX12DescriptorTableBindings* tableBindings);
 
 static uint16_t BoxIndices[36] = {
         2,  1,  0,
@@ -642,9 +641,9 @@ int AllocFromDeviceBuffer(size_t size, size_t structureCopies, size_t alignment,
     return index;
 }
 
-D3D12ShaderType ConvertShaderStageToD3D12ShaderStage(ShaderStageType type)
+DX12ShaderType ConvertShaderStageToD3D12ShaderStage(ShaderStageType type)
 {
-    D3D12ShaderType sType = VERTEX;
+    DX12ShaderType sType = VERTEX;
     switch (type)
     {
     case VERTEXSHADERSTAGE:
@@ -662,6 +661,37 @@ D3D12ShaderType ConvertShaderStageToD3D12ShaderStage(ShaderStageType type)
 
     return sType;
 }
+
+#define MAX_PUSH_ARGS 8
+#define MAX_ROOT_PARAMS 8
+
+EntryHandle CreateGraphicsPipelineObject(int* descriptorsets, int descCount, DX12PipelineCreationInfo* info)
+{
+    int rootParamIndex = 0;
+    UINT pushConstantsArgsCount = 0;
+
+    DX12ConstantBufferPipelineArguments* pushArgs = (DX12ConstantBufferPipelineArguments*)AllocFromTemp(sizeof(DX12ConstantBufferPipelineArguments) * MAX_PUSH_ARGS, alignof(DX12ConstantBufferPipelineArguments));
+    DX12DescriptorTableBindings* tables = (DX12DescriptorTableBindings*)AllocFromTemp(sizeof(DX12DescriptorTableBindings) * MAX_ROOT_PARAMS, alignof(DX12DescriptorTableBindings));
+
+    for (int b = 0; b < descCount; b++)
+    {
+        pushConstantsArgsCount += CreateCBVArgsFromResourceSet(descriptorsets[b], 0, pushArgs + pushConstantsArgsCount);
+    }
+
+    if (pushConstantsArgsCount)
+        rootParamIndex++;
+
+    info->cbvArgsCount = pushConstantsArgsCount;
+
+    info->descriptorTableCount = (UINT)CreateTablesFromResourceSet(descriptorsets, descCount, rootParamIndex, tables);
+
+    info->tables = tables;
+
+    return deviceInstance.CreateGraphicsPipelineObject(info, pushArgs);
+
+}
+
+static EntryHandle storedRenderables[2];
 
 void DoSceneStuff()
 {
@@ -688,7 +718,7 @@ void DoSceneStuff()
     }
 
 
-    triangles[0].rootSignature = CreateRootSignatureFromShaderGraph(mainLayout);//CreateGenericRootSignature();
+    EntryHandle genericRoot = CreateRootSignatureFromShaderGraph(mainLayout);//CreateGenericRootSignature();
 
 
     GenericPipelineStateInfo pipeInfo{};
@@ -698,7 +728,7 @@ void DoSceneStuff()
     pipeInfo.colorFormat = ImageFormat::R8G8B8A8;
     pipeInfo.depthFormat = ImageFormat::D32FLOAT;
 
-    triangles[0].pipelineState = CreatePipelineStateObject(triangles[0].rootSignature, shaderHandles, 2, &pipeInfo);
+    EntryHandle genericPipe  = CreatePipelineStateObject(genericRoot, shaderHandles, 2, &pipeInfo);
 
     TextureDetails details{};
 
@@ -711,7 +741,7 @@ void DoSceneStuff()
     int indexOffset = AllocFromDeviceBuffer(sizeof(BoxIndices), 1, 16, ComponentFormatType::NO_BUFFER_FORMAT, 1);
 
     
-    DriverMemoryBuffer* buffer = (DriverMemoryBuffer*)deviceInstance.GetAndValidateItem(deviceLocalBuffer, D12BUFFERMEMORYPOOL);
+    DX12DriverMemoryBuffer* buffer = (DX12DriverMemoryBuffer*)deviceInstance.GetAndValidateItem(deviceLocalBuffer, D12BUFFERMEMORYPOOL);
 
     deviceInstance.TransitionBufferBarrier(transferCommandBuffer, buffer->bufferHandle, D3D12_BARRIER_SYNC_NONE, D3D12_BARRIER_ACCESS_NO_ACCESS, D3D12_BARRIER_SYNC_COPY, D3D12_BARRIER_ACCESS_COPY_DEST);
 
@@ -727,7 +757,7 @@ void DoSceneStuff()
 
     deviceInstance.TransitionBufferBarrier(transferCommandBuffer, buffer->bufferHandle, D3D12_BARRIER_SYNC_COPY, D3D12_BARRIER_ACCESS_COPY_DEST, D3D12_BARRIER_SYNC_DRAW | D3D12_BARRIER_SYNC_INDEX_INPUT, D3D12_BARRIER_ACCESS_VERTEX_BUFFER | D3D12_BARRIER_ACCESS_CONSTANT_BUFFER | D3D12_BARRIER_ACCESS_INDEX_BUFFER);
 
-    bgraImageMemoryPool = deviceInstance.CreateImageResourceFromPool(bgraPool, details.width, details.height, 1, details.miplevels, D3D12_RESOURCE_FLAG_NONE, details.type, D3D12_RESOURCE_DIMENSION_TEXTURE2D);
+    bgraImageMemoryPool = deviceInstance.CreateSampledImageHandle(bgraPool, details.width, details.height, 1, details.miplevels, details.type, D3D12_RESOURCE_DIMENSION_TEXTURE2D);
 
     WriteToImageDeviceLocalMemory(bgraImageMemoryPool, details.data, details.width, details.height, 4, details.dataSize, details.type, details.miplevels, 1);
 
@@ -746,78 +776,45 @@ void DoSceneStuff()
     int basic1[2] = { camSRVDS, worldOne };
     int basic2[2] = { camSRVDS, worldTwo };
 
-
     static XMVECTOR color = { 1.0f, 0.0f, 0.0f, 1.0f };
    
     UploadConstant(camSRVDS, &color, 0);
-   
-    int cbvOff[2]{};
+
+    DX12PipelineCreationInfo info{}, info2{};
 
    
-    int ptr = triangles[0].cbvArgsCount;
-    for (int b = 0; b < 2; b++)
-    {
-        ptr += CreateCBVArgsFromResourceSet(basic1[b], 0, &triangles[0], ptr);
-    }
+    EntryHandle heaps[2] = { mainSRVDescriptorHeap, mainSamplerDescriptorHeap };
 
-    cbvOff[0] = (ptr ? 1 : 0);
-    triangles[0].cbvArgsCount = ptr;
+    info.heapsCounts = 2;
+    info.descriptorHeapHandles = heaps;
 
-    ptr = triangles[1].cbvArgsCount;
-    for (int b = 0; b < 2; b++)
-    {
-        ptr += CreateCBVArgsFromResourceSet(basic2[b], 0, &triangles[1], ptr);
-    }
+    info.topology = ConvertPrimitiveTypeToD3D12Topology(pipeInfo.primType);
+    info.instanceCount = 1;
 
-    triangles[1].cbvArgsCount = ptr;
+    info.vertexBufferHandle = buffer->bufferHandle;
+    info.vertexBufferOffset = allocationHandle[vertexOffset].offset;
+    info.vertexBufferSize = sizeof(BoxVerts);
+    info.vertexSize = sizeof(XMVECTOR) * 2;
+    info.vertexCount = 24;
 
-    cbvOff[1] = (ptr ? 1 : 0);
+    info.indexBuffer = buffer->bufferHandle;
+    info.indexBufferOffset = allocationHandle[indexOffset].offset;
+    info.indexBufferSize = sizeof(BoxIndices);
+    info.indexSize = 2;
+    info.indexCount = 36;
 
-    CreateTablesFromResourceSet(basic1, 2, cbvOff[0], &triangles[0]);
-    CreateTablesFromResourceSet(basic2, 2, cbvOff[0], &triangles[1]);
+    info.rootSignature = genericRoot;
+    info.pipelineState = genericPipe;
 
-    
-    triangles[0].device = triangles[1].device = &deviceInstance;
+  
+    info2 = info;
 
+  
+    EntryHandle tri1 = CreateGraphicsPipelineObject(basic1, 2, &info);
+    EntryHandle tri2 = CreateGraphicsPipelineObject(basic2, 2, &info2);
 
-    triangles[0].topology = ConvertPrimitiveTypeToD3D12Topology(pipeInfo.primType);
-    triangles[0].heapsCount = 2;
-    triangles[0].instanceCount = 1;
-    triangles[0].vertexCount = 24;
-    triangles[0].indexCount = 36;
-    triangles[0].descriptorHeap[0] = mainSRVDescriptorHeap;
-    triangles[0].descriptorHeap[1] = mainSamplerDescriptorHeap;
-
-
-    triangles[1].topology = ConvertPrimitiveTypeToD3D12Topology(pipeInfo.primType);
-    triangles[1].heapsCount = 2;
-    triangles[1].instanceCount = 1;
-    triangles[1].vertexCount = 24;
-    triangles[1].indexCount = 36;
-    triangles[1].descriptorHeap[0] = mainSRVDescriptorHeap;
-    triangles[1].descriptorHeap[1] = mainSamplerDescriptorHeap;
-
-    triangles[1].pipelineState = triangles[0].pipelineState;
-    triangles[1].rootSignature = triangles[0].rootSignature;
-
-   
-
-    triangles[0].indexBuffer =  buffer->bufferHandle;
-    triangles[1].indexBuffer =  buffer->bufferHandle;
-    triangles[0].vertexBuffer = buffer->bufferHandle;
-    triangles[1].vertexBuffer = buffer->bufferHandle;
-    triangles[0].vertexBufferOffset = allocationHandle[vertexOffset].offset;
-    triangles[1].vertexBufferOffset = allocationHandle[vertexOffset].offset;
-    triangles[0].indexBufferOffset = allocationHandle[indexOffset].offset;
-    triangles[1].indexBufferOffset = allocationHandle[indexOffset].offset;
-    triangles[0].vertexSize = sizeof(XMVECTOR)*2;
-    triangles[1].vertexSize = sizeof(XMVECTOR)*2;
-    triangles[0].indexSize = 2;
-    triangles[1].indexSize = 2;
-    triangles[0].indexBufferSize = sizeof(BoxIndices);
-    triangles[1].indexBufferSize = sizeof(BoxIndices);
-    triangles[0].vertexBufferSize = sizeof(BoxVerts);
-    triangles[1].vertexBufferSize = sizeof(BoxVerts);
+    storedRenderables[0] = tri1;
+    storedRenderables[1] = tri2;
 
 
 }
@@ -1186,7 +1183,8 @@ int Render()
 
     for (int i = 0; i < 2; i++)
     {
-        triangles[i].DrawObject(gCommandBuffer, currentFrame);   
+        DX12GraphicsPipelineObject* obj = (DX12GraphicsPipelineObject*)deviceInstance.GetAndValidateItem(storedRenderables[i], D12PIPELINEOBJECT);
+        obj->DrawObject(gCommandBuffer, currentFrame);   
     }
 
     gCommandBuffer->EndRenderPass();
@@ -1252,6 +1250,7 @@ void WriteToDeviceLocalMemory(int allocationIndex, void* data, size_t size, size
 
 void WriteToImageDeviceLocalMemory(EntryHandle imageHandle, char* data, UINT width, UINT height, UINT componentCount, UINT totalImageSize, DXGI_FORMAT format, UINT mipLevels, UINT layers)
 {
+
     deviceInstance.WriteToImageDeviceLocalMemory(imageHandle, transferCommandBuffer, stagingBuffers[currentFrame],
         data, width, height, componentCount, totalImageSize, format, mipLevels, layers
     );
@@ -1377,6 +1376,7 @@ EntryHandle CreateRootSignatureFromShaderGraph(ShaderGraph* graph)
     {
         numDescriptorsTables++;
         numRootParameters++;
+        numOfRanges++;
     }
 
     if (constantCount)
@@ -1641,11 +1641,10 @@ void ParseBMP(TextureDetails* details, const char* name)
     details->miplevels = 1;
 }
 
-int CreateCBVArgsFromResourceSet(int descriptorid, int rootParamId, PipelineObject* obj, int cbvArgsPtr)
+int CreateCBVArgsFromResourceSet(int descriptorid, int rootParamId, DX12ConstantBufferPipelineArguments* args)
 {
-    DX12ConstantBufferPipelineArguments* args = &obj->cbvArgs[cbvArgsPtr];
 
-    int currPtr = cbvArgsPtr;
+    DX12ConstantBufferPipelineArguments* headPtr = args;
 
     uintptr_t head = descriptorSets[descriptorid];
 
@@ -1672,29 +1671,28 @@ int CreateCBVArgsFromResourceSet(int descriptorid, int rootParamId, PipelineObje
             args->rootParamIndex = rootParamId;
             args->sizeInBytes = buffer->size;
             args->offsetInBytes = buffer->offset;
-            currPtr++;
-            args = &obj->cbvArgs[currPtr];
+            args++;
             break;
         }
         }
     }
 
-    return currPtr - cbvArgsPtr;
+    return (int)std::distance(headPtr, args);
 }
 
 
 
-void CreateTablesFromResourceSet(int* descriptorsets, int numDescriptorSet, int rootParamOffset, PipelineObject* obj)
+int CreateTablesFromResourceSet(int* descriptorsets, int numDescriptorSet, int rootParamOffset, DX12DescriptorTableBindings* tableBindings)
 {
     int samplerCount = 0;
 
     int descriptorTableCount = numDescriptorSet;
 
-    DescriptorHeapManager* mainHeap = (DescriptorHeapManager*)deviceInstance.GetAndValidateItem(mainSRVDescriptorHeap, D12DESCRIPTORMANAGER);
+    DX12DescriptorHeapManager* mainHeap = (DX12DescriptorHeapManager*)deviceInstance.GetAndValidateItem(mainSRVDescriptorHeap, D12DESCRIPTORMANAGER);
 
-    DescriptorHeapManager* samplerHeap = (DescriptorHeapManager*)deviceInstance.GetAndValidateItem(mainSamplerDescriptorHeap, D12DESCRIPTORMANAGER);
+    DX12DescriptorHeapManager* samplerHeap = (DX12DescriptorHeapManager*)deviceInstance.GetAndValidateItem(mainSamplerDescriptorHeap, D12DESCRIPTORMANAGER);
 
-    DescriptorHeapManager* stageSamplerHeap = (DescriptorHeapManager*)deviceInstance.GetAndValidateItem(stagingSamplerDescriptorHeap, D12DESCRIPTORMANAGER);
+    DX12DescriptorHeapManager* stageSamplerHeap = (DX12DescriptorHeapManager*)deviceInstance.GetAndValidateItem(stagingSamplerDescriptorHeap, D12DESCRIPTORMANAGER);
 
     int samplerIndex = stageSamplerHeap->descriptorHeapHandlePointer;
 
@@ -1704,22 +1702,22 @@ void CreateTablesFromResourceSet(int* descriptorsets, int numDescriptorSet, int 
     {
         int descriptorid = descriptorsets[i];
 
-        obj->descriptorHeapSelection[rootParamOffset+i] = 0;
+        tableBindings[i].descriptorHeapSelection = 0;
 
         uintptr_t head = descriptorSets[descriptorid];
         ShaderResourceSet* set = (ShaderResourceSet*)head;
 
         if (srvDescriptorTablesStart[descriptorid] != -1)
         {
-            obj->descriptorHeapPointer[rootParamOffset + i] = srvDescriptorTablesStart[descriptorid];
-            obj->resourceCount[rootParamOffset + i] = set->viewCount;
+            tableBindings[i].descriptorHeapBase = srvDescriptorTablesStart[descriptorid];
+            tableBindings[i].descriptorsCount = set->viewCount;
             continue;
         }
 
 
         uintptr_t* offsets = (uintptr_t*)(head + sizeof(ShaderResourceSet));
 
-        int count = set->bindingCount;
+        int bindingCount = set->bindingCount;
 
         int numberOfTables = set->setCount;
 
@@ -1731,7 +1729,7 @@ void CreateTablesFromResourceSet(int* descriptorsets, int numDescriptorSet, int 
 
         samplerCount += set->samplerCount;
 
-        for (int g = 0; g < count; g++)
+        for (int g = 0; g < bindingCount; g++)
         {
             ShaderResourceHeader* header = (ShaderResourceHeader*)offsets[g];
 
@@ -1747,8 +1745,13 @@ void CreateTablesFromResourceSet(int* descriptorsets, int numDescriptorSet, int 
                 {
                     for (int h = 0; h < arrayCount; h++)
                     {
-                        deviceInstance.CreateImageSRVDescriptorHandle(image->textureHandles[h],
-                            1, DXGI_FORMAT_B8G8R8A8_UNORM_SRGB, mainHeap, mainHeapIndex + (j * bufferCounts) + h, D3D12_SRV_DIMENSION_TEXTURE2D
+                        DX12ImageHandle* imageHandle = (DX12ImageHandle*)deviceInstance.GetAndValidateItem(image->textureHandles[h], D12IMAGEHANDLE);
+
+                        deviceInstance.CreateImageSRVDescriptorHandle(
+                            imageHandle->resourceIndex,
+                            imageHandle->mipLevels, imageHandle->format, 
+                            mainHeap, mainHeapIndex + (j * bufferCounts) + h, 
+                            D3D12_SRV_DIMENSION_TEXTURE2D
                         );
                     }
 
@@ -1767,7 +1770,7 @@ void CreateTablesFromResourceSet(int* descriptorsets, int numDescriptorSet, int 
             case ShaderResourceType::SAMPLER2D:
             case ShaderResourceType::SAMPLERCUBE:
             {
-                printf("Unimplemented! %d\n", header->type);
+               // printf("Unimplemented! %d\n", header->type);
 
                 break;
             }
@@ -1891,19 +1894,15 @@ void CreateTablesFromResourceSet(int* descriptorsets, int numDescriptorSet, int 
                         }
                     }
 
-
+                
                 }
+                mainHeapIndex += arrayCount;
             }
-
-            mainHeapIndex += arrayCount;
-
-
-            break;
             }
         }
 
-        obj->descriptorHeapPointer[rootParamOffset+i] = srvDescriptorTablesStart[descriptorid] = mainHeap->descriptorHeapHandlePointer;
-        obj->resourceCount[rootParamOffset+i] = bufferCounts;
+        tableBindings[i].descriptorHeapBase = srvDescriptorTablesStart[descriptorid] = mainHeap->descriptorHeapHandlePointer;
+        tableBindings[i].descriptorsCount = bufferCounts;
 
         mainHeap->descriptorHeapHandlePointer += (bufferCounts * numberOfTables);
     }
@@ -1919,16 +1918,16 @@ void CreateTablesFromResourceSet(int* descriptorsets, int numDescriptorSet, int 
             );
         }
 
-        obj->descriptorHeapPointer[rootParamOffset+numDescriptorSet] = samplerHeap->descriptorHeapHandlePointer;
-        obj->resourceCount[rootParamOffset+numDescriptorSet] =  samplerCount;
-        obj->descriptorHeapSelection[rootParamOffset+numDescriptorSet] = 1;
+        tableBindings[numDescriptorSet].descriptorHeapBase = samplerHeap->descriptorHeapHandlePointer;
+        tableBindings[numDescriptorSet].descriptorsCount =  samplerCount;
+        tableBindings[numDescriptorSet].descriptorHeapSelection = 1;
         
         samplerHeap->descriptorHeapHandlePointer += (samplerCount * maxSamplerFrameCount);
 
         descriptorTableCount++;
     }
 
-    obj->descriptorTableCount = descriptorTableCount;
+    return descriptorTableCount;
 }
 
 
@@ -2107,17 +2106,17 @@ ShaderGraph* CreateShaderGraph(
             {
                 resource->binding = bindingCount;
 
-                
+                if (tag->resourceType == ShaderResourceType::SAMPLERSTATE)
+                {
+                    setLay->samplerCount += tag->arrayCount;
+                }
+                else
+                {
+                    setLay->viewCount += tag->arrayCount;
+                }
             }
 
-            if (tag->resourceType == ShaderResourceType::SAMPLERSTATE)
-            {
-                setLay->samplerCount += tag->arrayCount;
-            }
-            else
-            {
-                setLay->viewCount += tag->arrayCount;
-            }
+            
 
             resource->stages = tag->shaderstage;
 

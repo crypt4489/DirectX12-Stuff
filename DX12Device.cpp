@@ -168,7 +168,7 @@ EntryHandle DX12Device::AllocTypeForEntry(void* data, DX12ComType type)
 
 void* DX12Device::GetAndValidateItem(EntryHandle poolHandle, DX12ComType type)
 {
-    PoolItem* item = &deviceHandlePool[poolHandle];
+    DX12PoolItem* item = &deviceHandlePool[poolHandle];
     if (type != item->comType)
     {
         printf("Mismatched entry in pools %d %d", type, item->comType);
@@ -182,7 +182,7 @@ void* DX12Device::GetAndValidateItem(EntryHandle poolHandle, DX12ComType type)
 
 ID3D12Resource* DX12Device::GetResourceHandleForMemoryBuffer(EntryHandle memoryBuffer)
 {
-    DriverMemoryBuffer* memBuffer = (DriverMemoryBuffer*)GetAndValidateItem(memoryBuffer, D12BUFFERMEMORYPOOL);
+    DX12DriverMemoryBuffer* memBuffer = (DX12DriverMemoryBuffer*)GetAndValidateItem(memoryBuffer, D12BUFFERMEMORYPOOL);
 
     return (ID3D12Resource*)GetAndValidateItem(memBuffer->bufferHandle, D12RESOURCEHANDLE);
 }
@@ -246,7 +246,7 @@ void  DX12Device::ReleaseAllDriverCOMHandles()
 
         case D12FENCEOBJECT:
         {
-            D12Fence* fenceObj = reinterpret_cast<D12Fence*>(rawPtr);
+            DX12Fence* fenceObj = reinterpret_cast<DX12Fence*>(rawPtr);
             CloseHandle(fenceObj->fenceEvent);
         }
         }
@@ -368,7 +368,7 @@ ID3D12Heap* DX12Device::CreateDX12Heap(SIZE_T size, SIZE_T alignment, D3D12_HEAP
 
 EntryHandle DX12Device::CreateImageMemoryPool(SIZE_T sizeOfPool, SIZE_T alignment, D3D12_HEAP_FLAGS heapFlags, D3D12_HEAP_TYPE heapType)
 {
-    ImageMemoryPool* pool = (ImageMemoryPool*)AllocFromDeviceStorage(sizeof(ImageMemoryPool), 4);
+    DX12ImageMemoryPool* pool = (DX12ImageMemoryPool*)AllocFromDeviceStorage(sizeof(DX12ImageMemoryPool), 4);
 
     ID3D12Heap* heap = CreateDX12Heap(sizeOfPool, alignment, heapFlags, heapType);
 
@@ -411,7 +411,7 @@ int DX12Device::CreateDepthStencilView(EntryHandle descriptorHeapIdx, EntryHandl
 
     ID3D12DescriptorHeap* descHeap = (ID3D12DescriptorHeap*)GetAndValidateItem(descriptorHeapIdx, D12DESCRIPTORHEAP);
 
-    ImageMemoryPool* pool = (ImageMemoryPool*)GetAndValidateItem(poolIdx, D12IMAGEMEMORYPOOL);
+    DX12ImageMemoryPool* pool = (DX12ImageMemoryPool*)GetAndValidateItem(poolIdx, D12IMAGEMEMORYPOOL);
 
     DX12CPUDescriptorHandle dsvHandle(descHeap->GetCPUDescriptorHandleForHeapStart());
 
@@ -640,7 +640,7 @@ HANDLE DX12Device::CreateEventHandle()
 
 EntryHandle DX12Device::CreateFenceObject()
 {
-    D12Fence* fence = (D12Fence*)AllocFromDeviceStorage(sizeof(D12Fence), alignof(HANDLE));
+    DX12Fence* fence = (DX12Fence*)AllocFromDeviceStorage(sizeof(DX12Fence), alignof(HANDLE));
 
     ID3D12Fence* fenceHandle = CreateFence(deviceHandle);
 
@@ -655,7 +655,7 @@ uint64_t DX12Device::Signal(EntryHandle commandQueue, EntryHandle fenceObjIndex,
 {
     uint64_t fenceValueForSignal = ++fenceValue;
 
-    D12Fence* fence = (D12Fence*)GetAndValidateItem(fenceObjIndex, D12FENCEOBJECT);
+    DX12Fence* fence = (DX12Fence*)GetAndValidateItem(fenceObjIndex, D12FENCEOBJECT);
 
     ID3D12Fence* fenceHandle = (ID3D12Fence*)GetAndValidateItem(fence->fenceHandle, D12FENCEHANDLE);
 
@@ -675,7 +675,7 @@ uint64_t DX12Device::Signal(EntryHandle commandQueue, EntryHandle fenceObjIndex)
 
     ID3D12CommandQueue* lQueueHandle = (ID3D12CommandQueue*)GetAndValidateItem(commandQueue, D12QUEUE);
 
-    D12Fence* fence = (D12Fence*)GetAndValidateItem(fenceObjIndex, D12FENCEOBJECT);
+    DX12Fence* fence = (DX12Fence*)GetAndValidateItem(fenceObjIndex, D12FENCEOBJECT);
 
     ID3D12Fence* fenceHandle = (ID3D12Fence*)GetAndValidateItem(fence->fenceHandle, D12FENCEHANDLE);
 
@@ -693,7 +693,7 @@ uint64_t DX12Device::Signal(EntryHandle commandQueue, EntryHandle fenceObjIndex)
 void DX12Device::WaitForFenceValue(EntryHandle fenceObjIndex, uint64_t fenceValue, DWORD duration)
 {
 
-    D12Fence* fence = (D12Fence*)GetAndValidateItem(fenceObjIndex, D12FENCEOBJECT);
+    DX12Fence* fence = (DX12Fence*)GetAndValidateItem(fenceObjIndex, D12FENCEOBJECT);
 
     ID3D12Fence* fenceHandle = (ID3D12Fence*)GetAndValidateItem(fence->fenceHandle, D12FENCEHANDLE);
 
@@ -742,7 +742,7 @@ EntryHandle DX12Device::CreateShaderBlob(const char* shaderfile)
 EntryHandle DX12Device::CreateHostBuffer(UINT size, DXGI_FORMAT format, D3D12_RESOURCE_FLAGS flags)
 {
 
-    DriverMemoryBuffer* dmb = (DriverMemoryBuffer*)AllocFromDeviceStorage(sizeof(DriverMemoryBuffer), 4);
+    DX12DriverMemoryBuffer* dmb = (DX12DriverMemoryBuffer*)AllocFromDeviceStorage(sizeof(DX12DriverMemoryBuffer), 4);
 
     dmb->sizeOfAlloc = size;
     dmb->currentPointer = 0;
@@ -759,7 +759,7 @@ EntryHandle DX12Device::CreateHostBuffer(UINT size, DXGI_FORMAT format, D3D12_RE
 
 EntryHandle DX12Device::CreateDeviceBuffer(UINT size, DXGI_FORMAT format, D3D12_RESOURCE_FLAGS flags)
 {
-    DriverMemoryBuffer* dmb = (DriverMemoryBuffer*)AllocFromDeviceStorage(sizeof(DriverMemoryBuffer), 4);
+    DX12DriverMemoryBuffer* dmb = (DX12DriverMemoryBuffer*)AllocFromDeviceStorage(sizeof(DX12DriverMemoryBuffer), 4);
 
     dmb->sizeOfAlloc = size;
     dmb->currentPointer = 0;
@@ -810,7 +810,7 @@ ID3D12Resource* DX12Device::CreateBuffer(ID3D12Device2* device, SIZE_T size, DXG
 
 SIZE_T DX12Device::AllocFromDriverMemoryBuffer(EntryHandle bufferPoolIndex, SIZE_T allocSize, SIZE_T alignment)
 {
-    DriverMemoryBuffer* dmb = (DriverMemoryBuffer*)GetAndValidateItem(bufferPoolIndex, D12BUFFERMEMORYPOOL);
+    DX12DriverMemoryBuffer* dmb = (DX12DriverMemoryBuffer*)GetAndValidateItem(bufferPoolIndex, D12BUFFERMEMORYPOOL);
 
     SIZE_T current = dmb->currentPointer;
     SIZE_T start = current;
@@ -847,7 +847,7 @@ void DX12Device::WriteToHostMemory(EntryHandle memoryBuffer, void* data, SIZE_T 
 {
     void* mappedData = nullptr;
 
-    DriverMemoryBuffer* dmb = (DriverMemoryBuffer*)GetAndValidateItem(memoryBuffer, D12BUFFERMEMORYPOOL);
+    DX12DriverMemoryBuffer* dmb = (DX12DriverMemoryBuffer*)GetAndValidateItem(memoryBuffer, D12BUFFERMEMORYPOOL);
 
     ID3D12Resource* buffer = (ID3D12Resource*)GetAndValidateItem(dmb->bufferHandle, D12RESOURCEHANDLE);
 
@@ -868,11 +868,11 @@ void DX12Device::WriteToDeviceLocalMemory(EntryHandle deviceLocalMemBuffer, Entr
 {
     ID3D12GraphicsCommandList7* transCommandBuffer = (ID3D12GraphicsCommandList7*)GetAndValidateItem(transferCommandBuffer, D12COMMANDBUFFER7);
 
-    DriverMemoryBuffer* dmb = (DriverMemoryBuffer*)GetAndValidateItem(deviceLocalMemBuffer, D12BUFFERMEMORYPOOL);
+    DX12DriverMemoryBuffer* dmb = (DX12DriverMemoryBuffer*)GetAndValidateItem(deviceLocalMemBuffer, D12BUFFERMEMORYPOOL);
 
     ID3D12Resource* dlBuffer = (ID3D12Resource*)GetAndValidateItem(dmb->bufferHandle, D12RESOURCEHANDLE);
 
-    DriverMemoryBuffer* dmb2 = (DriverMemoryBuffer*)GetAndValidateItem(stagingBufferIndex, D12BUFFERMEMORYPOOL);
+    DX12DriverMemoryBuffer* dmb2 = (DX12DriverMemoryBuffer*)GetAndValidateItem(stagingBufferIndex, D12BUFFERMEMORYPOOL);
 
     ID3D12Resource* stagingBuffer = (ID3D12Resource*)GetAndValidateItem(dmb2->bufferHandle, D12RESOURCEHANDLE);
 
@@ -946,7 +946,7 @@ void DX12Device::TransitionImageResource(ID3D12GraphicsCommandList7* cmdBuffer, 
     cmdBuffer->Barrier(1, &barrierGroup);
 }
 
-void DX12Device::WriteToImageDeviceLocalMemory(EntryHandle imageResourceHandle, EntryHandle commandBufferIndex, EntryHandle stagingBufferIndex, char* data,
+void DX12Device::WriteToImageDeviceLocalMemory(EntryHandle imageHandle, EntryHandle commandBufferIndex, EntryHandle stagingBufferIndex, char* data,
     UINT width, UINT height,
     UINT componentCount, UINT totalImageSize,
     DXGI_FORMAT format,
@@ -956,7 +956,7 @@ void DX12Device::WriteToImageDeviceLocalMemory(EntryHandle imageResourceHandle, 
 
     UINT stride = ((width * componentCount) + (255)) & ~255;
 
-    DriverMemoryBuffer* dmb = (DriverMemoryBuffer*)GetAndValidateItem(stagingBufferIndex, D12BUFFERMEMORYPOOL);
+    DX12DriverMemoryBuffer* dmb = (DX12DriverMemoryBuffer*)GetAndValidateItem(stagingBufferIndex, D12BUFFERMEMORYPOOL);
 
     SIZE_T allocLoc = AllocFromDriverMemoryBuffer(stagingBufferIndex, stride * height, 255);
 
@@ -975,12 +975,14 @@ void DX12Device::WriteToImageDeviceLocalMemory(EntryHandle imageResourceHandle, 
 
     stagingBuffer->Unmap(0, nullptr);
 
-    ID3D12Resource* imageHandle = (ID3D12Resource*)GetAndValidateItem(imageResourceHandle, D12RESOURCEHANDLE);
+    DX12ImageHandle* imageHandleT = (DX12ImageHandle*)GetAndValidateItem(imageHandle, D12IMAGEHANDLE);
+
+    ID3D12Resource* imageResourceHandle = (ID3D12Resource*)GetAndValidateItem(imageHandleT->resourceIndex, D12RESOURCEHANDLE);
 
     ID3D12GraphicsCommandList7* cmdBuffer = (ID3D12GraphicsCommandList7*)GetAndValidateItem(commandBufferIndex, D12COMMANDBUFFER7);
 
 
-    TransitionImageResource(cmdBuffer, imageHandle,
+    TransitionImageResource(cmdBuffer, imageResourceHandle,
         D3D12_BARRIER_SYNC_NONE, D3D12_BARRIER_ACCESS_NO_ACCESS,
         D3D12_BARRIER_SYNC_COPY, D3D12_BARRIER_ACCESS_COPY_DEST,
         D3D12_BARRIER_LAYOUT_COMMON, D3D12_BARRIER_LAYOUT_COPY_DEST,
@@ -999,13 +1001,13 @@ void DX12Device::WriteToImageDeviceLocalMemory(EntryHandle imageResourceHandle, 
     src.PlacedFootprint.Footprint.RowPitch = stride;
 
 
-    dest.pResource = imageHandle;
+    dest.pResource = imageResourceHandle;
     dest.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
     dest.SubresourceIndex = 0;
 
     cmdBuffer->CopyTextureRegion(&dest, 0, 0, 0, &src, NULL);
 
-    TransitionImageResource(cmdBuffer, imageHandle,
+    TransitionImageResource(cmdBuffer, imageResourceHandle,
         D3D12_BARRIER_SYNC_COPY, D3D12_BARRIER_ACCESS_COPY_DEST,
         D3D12_BARRIER_SYNC_PIXEL_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE,
 
@@ -1048,7 +1050,56 @@ EntryHandle DX12Device::CreateCommittedImageResource(UINT width, UINT height, UI
     return AllocTypeForEntry(imageHandle, D12RESOURCEHANDLE);
 }
 
-ID3D12Resource* DX12Device::CreatePlacedImageResource(ImageMemoryPool* pool, UINT width, UINT height, UINT depth, UINT mips, D3D12_RESOURCE_FLAGS flags, DXGI_FORMAT format, D3D12_RESOURCE_DIMENSION dimension)
+EntryHandle DX12Device::CreateGraphicsPipelineObject(DX12PipelineCreationInfo* info, DX12ConstantBufferPipelineArguments* constantArgs)
+{
+    DX12GraphicsPipelineObject* obj = (DX12GraphicsPipelineObject*)AllocFromDeviceStorage(sizeof(DX12GraphicsPipelineObject), alignof(DX12GraphicsPipelineObject));
+
+	obj->rootSignature = info->rootSignature;
+	obj->pipelineState = info->pipelineState;
+
+	obj->heapsCount = info->heapsCounts;
+
+
+	for (UINT i = 0; i < info->heapsCounts && i < 8; i++)
+	{
+		obj->descriptorHeap[i] = info->descriptorHeapHandles[i];
+	}
+
+	obj->descriptorTableCount = info->descriptorTableCount;
+
+	for (UINT i = 0; i < info->descriptorTableCount && i < 8; i++)
+	{
+        obj->tables[i] = info->tables[i];
+	}
+
+	obj->topology = info->topology;
+	obj->instanceCount = info->instanceCount;
+
+	obj->vertexBuffer = info->vertexBufferHandle;
+	obj->vertexBufferOffset = info->vertexBufferOffset;
+	obj->vertexBufferSize = info->vertexBufferSize;
+	obj->vertexSize = info->vertexSize;
+	obj->vertexCount = info->vertexCount;
+
+	obj->indexBuffer = info->indexBuffer;
+	obj->indexBufferOffset = info->indexBufferOffset;
+	obj->indexBufferSize = info->indexBufferSize;
+	obj->indexSize = info->indexSize;
+	obj->indexCount = info->indexCount;
+
+	obj->cbvArgsCount = info->cbvArgsCount;
+
+    obj->constantsRangesCount = (obj->cbvArgsCount ? 1 : 0);
+
+    memcpy(obj->cbvArgs, constantArgs, sizeof(DX12ConstantBufferPipelineArguments) * obj->cbvArgsCount);
+
+    obj->device = this;
+
+    return AllocTypeForEntry(obj, D12PIPELINEOBJECT);
+
+}
+
+ID3D12Resource* DX12Device::CreatePlacedImageResource(DX12ImageMemoryPool* pool, UINT width, UINT height, UINT depth, UINT mips, D3D12_RESOURCE_FLAGS flags, DXGI_FORMAT format, D3D12_RESOURCE_DIMENSION dimension)
 {
 
 
@@ -1089,9 +1140,22 @@ ID3D12Resource* DX12Device::CreatePlacedImageResource(ImageMemoryPool* pool, UIN
     return imageHandle;
 }
 
+EntryHandle DX12Device::CreateSampledImageHandle(EntryHandle poolIdx, UINT width, UINT height, UINT depth, UINT mips, DXGI_FORMAT format, D3D12_RESOURCE_DIMENSION dimension)
+{
+    DX12ImageHandle* handle = (DX12ImageHandle*)AllocFromDeviceStorage(sizeof(DX12ImageHandle), alignof(DX12ImageHandle));
+
+    handle->arrayCount = depth;
+    handle->memHeapIndex = poolIdx;
+    handle->mipLevels = mips;
+    handle->format = format;
+    handle->resourceIndex = CreateImageResourceFromPool(poolIdx, width, height, depth, mips, D3D12_RESOURCE_FLAG_NONE, format, dimension);
+
+    return AllocTypeForEntry(handle, D12IMAGEHANDLE);
+}
+
 EntryHandle DX12Device::CreateImageResourceFromPool(EntryHandle poolIdx, UINT width, UINT height, UINT depth, UINT mips, D3D12_RESOURCE_FLAGS flags, DXGI_FORMAT format, D3D12_RESOURCE_DIMENSION dimension)
 {
-    ImageMemoryPool* pool = (ImageMemoryPool*)GetAndValidateItem(poolIdx, D12IMAGEMEMORYPOOL);
+    DX12ImageMemoryPool* pool = (DX12ImageMemoryPool*)GetAndValidateItem(poolIdx, D12IMAGEMEMORYPOOL);
 
     ID3D12Resource* resource = CreatePlacedImageResource(pool, width, height, depth, mips, flags, format, dimension);
 
@@ -1127,7 +1191,7 @@ EntryHandle DX12Device::CreateRootSignature(DX12RootSignatureCreate* createInfo,
 }
 
 
-void DX12Device::CreateImageSampler(DescriptorHeapManager* samplerDescriptorHeap, UINT heapIndex)
+void DX12Device::CreateImageSampler(DX12DescriptorHeapManager* samplerDescriptorHeap, UINT heapIndex)
 {
     ID3D12DescriptorHeap* sampDescriptor = (ID3D12DescriptorHeap*)GetAndValidateItem(samplerDescriptorHeap->descriptorHeap, D12DESCRIPTORHEAP);
 
@@ -1152,7 +1216,7 @@ void DX12Device::CreateImageSampler(DescriptorHeapManager* samplerDescriptorHeap
 }
 
 
-void DX12Device::CreateImageSRVDescriptorHandle(EntryHandle bufferPoolHandle, UINT mipsLevels, DXGI_FORMAT format, DescriptorHeapManager* heap, UINT heapIndex, D3D12_SRV_DIMENSION dimension)
+void DX12Device::CreateImageSRVDescriptorHandle(EntryHandle bufferPoolHandle, UINT mipsLevels, DXGI_FORMAT format, DX12DescriptorHeapManager* heap, UINT heapIndex, D3D12_SRV_DIMENSION dimension)
 {
     ID3D12DescriptorHeap* srvDescriptor = (ID3D12DescriptorHeap*)GetAndValidateItem(heap->descriptorHeap, D12DESCRIPTORHEAP);
 
@@ -1171,7 +1235,7 @@ void DX12Device::CreateImageSRVDescriptorHandle(EntryHandle bufferPoolHandle, UI
 
 }
 
-void DX12Device::CreateBufferSRVDescriptorHandle(EntryHandle bufferPoolHandle, SIZE_T  offset, UINT numCount, SIZE_T size, DXGI_FORMAT format, DescriptorHeapManager* heap, UINT heapIndex, D3D12_SRV_DIMENSION dimension)
+void DX12Device::CreateBufferSRVDescriptorHandle(EntryHandle bufferPoolHandle, SIZE_T  offset, UINT numCount, SIZE_T size, DXGI_FORMAT format, DX12DescriptorHeapManager* heap, UINT heapIndex, D3D12_SRV_DIMENSION dimension)
 {
 
     UINT firstElement = (UINT)(offset / size);
@@ -1195,7 +1259,7 @@ void DX12Device::CreateBufferSRVDescriptorHandle(EntryHandle bufferPoolHandle, S
 
 }
 
-void DX12Device::CreateBufferUAVDescriptorHandle(EntryHandle bufferPoolHandle, SIZE_T offset, UINT numCount, SIZE_T size, SIZE_T counterOffsetInBytes, DXGI_FORMAT format, DescriptorHeapManager* heap, UINT heapIndex, D3D12_BUFFER_UAV_FLAGS uavFlags)
+void DX12Device::CreateBufferUAVDescriptorHandle(EntryHandle bufferPoolHandle, SIZE_T offset, UINT numCount, SIZE_T size, SIZE_T counterOffsetInBytes, DXGI_FORMAT format, DX12DescriptorHeapManager* heap, UINT heapIndex, D3D12_BUFFER_UAV_FLAGS uavFlags)
 {
 
     UINT firstElement = (UINT)(offset / size);
@@ -1222,7 +1286,7 @@ void DX12Device::CreateBufferUAVDescriptorHandle(EntryHandle bufferPoolHandle, S
 
 }
 
-void DX12Device::CreateCBVDescriptorHandle(EntryHandle bufferPoolHandle, SIZE_T offset, SIZE_T size, DescriptorHeapManager* heap, UINT heapIndex)
+void DX12Device::CreateCBVDescriptorHandle(EntryHandle bufferPoolHandle, SIZE_T offset, SIZE_T size, DX12DescriptorHeapManager* heap, UINT heapIndex)
 {
     ID3D12DescriptorHeap* cbvDescriptor = (ID3D12DescriptorHeap*)GetAndValidateItem(heap->descriptorHeap, D12DESCRIPTORHEAP);
 
@@ -1240,7 +1304,7 @@ void DX12Device::CreateCBVDescriptorHandle(EntryHandle bufferPoolHandle, SIZE_T 
 
 EntryHandle DX12Device::CreateDescriptorHeapManager(UINT maxDescriptorHandles, D3D12_DESCRIPTOR_HEAP_TYPE type, D3D12_DESCRIPTOR_HEAP_FLAGS flags)
 {
-    DescriptorHeapManager* manager = (DescriptorHeapManager*)AllocFromDeviceStorage(sizeof(DescriptorHeapManager), 4);
+    DX12DescriptorHeapManager* manager = (DX12DescriptorHeapManager*)AllocFromDeviceStorage(sizeof(DX12DescriptorHeapManager), 4);
 
     manager->descriptorHeap = CreateDescriptorHeap(type, maxDescriptorHandles, flags, &manager->descriptorHeapHandleSize);
     manager->maxDescriptorHeapHandles = maxDescriptorHandles;
@@ -1253,7 +1317,7 @@ EntryHandle DX12Device::CreateDescriptorHeapManager(UINT maxDescriptorHandles, D
 
 ID3D12DescriptorHeap* DX12Device::GetDescriptorHeapFromManager(EntryHandle managerIndex)
 {
-    DescriptorHeapManager* heapManager = (DescriptorHeapManager*)GetAndValidateItem(managerIndex, D12DESCRIPTORMANAGER);
+    DX12DescriptorHeapManager* heapManager = (DX12DescriptorHeapManager*)GetAndValidateItem(managerIndex, D12DESCRIPTORMANAGER);
 
     return (ID3D12DescriptorHeap*)GetAndValidateItem(heapManager->descriptorHeap, D12DESCRIPTORHEAP);
 }
@@ -1261,12 +1325,12 @@ ID3D12DescriptorHeap* DX12Device::GetDescriptorHeapFromManager(EntryHandle manag
 
 UINT DX12Device::GetDescriptorHeapSizeFromManager(EntryHandle managerIndex)
 {
-    DescriptorHeapManager* heapManager = (DescriptorHeapManager*)GetAndValidateItem(managerIndex, D12DESCRIPTORMANAGER);
+    DX12DescriptorHeapManager* heapManager = (DX12DescriptorHeapManager*)GetAndValidateItem(managerIndex, D12DESCRIPTORMANAGER);
 
     return heapManager->descriptorHeapHandleSize;
 }
 
-void PipelineObject::DrawObject(ID3D12GraphicsCommandList7* gCommandBuffer, UINT currentSet)
+void DX12GraphicsPipelineObject::DrawObject(ID3D12GraphicsCommandList7* gCommandBuffer, UINT currentSet)
 {
     ID3D12RootSignature* sign = (ID3D12RootSignature*)device->GetAndValidateItem(rootSignature, D12ROOTSIGNATURE);
 
@@ -1277,7 +1341,7 @@ void PipelineObject::DrawObject(ID3D12GraphicsCommandList7* gCommandBuffer, UINT
 
     UINT* heapSizes = (UINT*)device->AllocFromDeviceCache(sizeof(UINT) * heapsCount, 4);
 
-    for (int j = 0; j < heapsCount; j++)
+    for (UINT j = 0; j < heapsCount; j++)
     {
         heaps[j] = (ID3D12DescriptorHeap*)device->GetDescriptorHeapFromManager(descriptorHeap[j]);
         heapSizes[j] = device->GetDescriptorHeapSizeFromManager(descriptorHeap[j]);
@@ -1290,16 +1354,10 @@ void PipelineObject::DrawObject(ID3D12GraphicsCommandList7* gCommandBuffer, UINT
     gCommandBuffer->SetPipelineState(pipelineStateHandle);
     gCommandBuffer->IASetPrimitiveTopology(topology);
 
-    int rootOffset = cbvArgsCount;
+    UINT pushArgsCount = cbvArgsCount;
+    UINT pushRangeCount = constantsRangesCount;
 
-    for (int j = rootOffset; j < rootOffset + descriptorTableCount; j++)
-    {
-        int heapindex = descriptorHeapSelection[j];
-        DX12GPUDescriptorHandle handle = DX12GPUDescriptorHandle(heaps[heapindex]->GetGPUDescriptorHandleForHeapStart(), descriptorHeapPointer[j] + (currentSet * resourceCount[j]), heapSizes[heapindex]);
-        gCommandBuffer->SetGraphicsRootDescriptorTable(j, handle);
-    }
-
-    for (int j = 0; j < rootOffset; j++)
+    for (UINT j = 0; j < pushArgsCount; j++)
     {
         DX12ConstantBufferPipelineArguments* pipeArgs = &cbvArgs[j];
         gCommandBuffer->SetGraphicsRoot32BitConstants(
@@ -1310,6 +1368,19 @@ void PipelineObject::DrawObject(ID3D12GraphicsCommandList7* gCommandBuffer, UINT
         );
     }
 
+    for (UINT j = pushRangeCount; j < pushRangeCount +descriptorTableCount; j++)
+    {
+        UINT descripotrTableIndex = j - pushRangeCount;
+        UINT descriptorTableSize = tables[descripotrTableIndex].descriptorsCount;
+        UINT descriptorTablesBase = tables[descripotrTableIndex].descriptorHeapBase;
+        UINT heapindex = tables[descripotrTableIndex].descriptorHeapSelection;
+
+        UINT descriptorTableOffset = descriptorTablesBase + (currentSet * descriptorTableSize);
+
+
+        DX12GPUDescriptorHandle handle = DX12GPUDescriptorHandle(heaps[heapindex]->GetGPUDescriptorHandleForHeapStart(), descriptorTableOffset, heapSizes[heapindex]);
+        gCommandBuffer->SetGraphicsRootDescriptorTable(j, handle);
+    }
 
     if (vertexBuffer != ~0ui64)
     {

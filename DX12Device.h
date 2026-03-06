@@ -34,21 +34,21 @@ enum DX12ComType
     D12IMAGEHANDLE = 18,
 };
 
-struct PoolItem
+struct DX12PoolItem
 {
     DX12ComType comType;
     uintptr_t memoryHandle;
 };
 
 
-struct D12Fence
+struct DX12Fence
 {
     EntryHandle fenceHandle;
     uint64_t fenceValue;
     HANDLE fenceEvent;
 };
 
-struct ImageMemoryPool
+struct DX12ImageMemoryPool
 {
     EntryHandle heap;
     SIZE_T currentPointer;
@@ -56,7 +56,7 @@ struct ImageMemoryPool
     SIZE_T alignment;
 };
 
-struct DriverMemoryBuffer
+struct DX12DriverMemoryBuffer
 {
     EntryHandle bufferHandle;
     SIZE_T sizeOfAlloc;
@@ -65,7 +65,7 @@ struct DriverMemoryBuffer
     D3D12_RESOURCE_STATES initialState;
 };
 
-enum D3D12ShaderType
+enum DX12ShaderType
 {
     VERTEX = 0,
     PIXEL = 1
@@ -73,11 +73,11 @@ enum D3D12ShaderType
 
 struct ShaderHandles
 {
-    D3D12ShaderType type;
+    DX12ShaderType type;
     EntryHandle shader;
 };
 
-struct DescriptorHeapManager
+struct DX12DescriptorHeapManager
 {
     D3D12_DESCRIPTOR_HEAP_TYPE type;
     EntryHandle descriptorHeap;
@@ -106,19 +106,26 @@ struct DX12ImageHandle
     DXGI_FORMAT format;
 };
 
-struct PipelineCreationInfo
+
+struct DX12DescriptorTableBindings
+{
+    UINT descriptorHeapSelection;
+    UINT descriptorsCount;
+    UINT descriptorHeapBase;
+};
+
+struct DX12GraphicsPipelineObject
 {
     EntryHandle rootSignature;
     EntryHandle pipelineState;
-    UINT heapsCounts;
-    EntryHandle* descriptorHeapHandles;
+    UINT heapsCount;
+    EntryHandle descriptorHeap[8];
     UINT descriptorTableCount;
-    UINT* descriptorTablePointerHead;
-    UINT* descriptorTableSizes;
-    UINT* descriptorHeapSelections;
+    DX12DescriptorTableBindings tables[8];
     D3D_PRIMITIVE_TOPOLOGY topology;
     UINT instanceCount;
-    EntryHandle vertexBufferHandle;
+
+    EntryHandle vertexBuffer = ~0ui64;
     SIZE_T vertexBufferOffset;
     SIZE_T vertexBufferSize;
     UINT vertexSize;
@@ -128,38 +135,37 @@ struct PipelineCreationInfo
     SIZE_T indexBufferSize;
     UINT indexSize;
     UINT indexCount;
-    UINT cbvArgsCount;
-};
-
-
-struct PipelineObject
-{
-    EntryHandle rootSignature;
-    EntryHandle pipelineState;
-    int heapsCount;
-    EntryHandle descriptorHeap[8];
-    int descriptorTableCount;
-    int descriptorHeapPointer[8];
-    int resourceCount[8];
-    int descriptorHeapSelection[8]; //number of descriptor tables
-    D3D_PRIMITIVE_TOPOLOGY topology;//D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST
-    int instanceCount;
-
-    EntryHandle vertexBuffer = ~0ui64;
-    SIZE_T vertexBufferOffset;
-    SIZE_T vertexBufferSize;
-    int vertexSize;
-    int vertexCount;
-    EntryHandle indexBuffer = ~0ui64;
-    SIZE_T indexBufferOffset;
-    SIZE_T indexBufferSize;
-    int indexSize;
-    int indexCount;
     DX12ConstantBufferPipelineArguments cbvArgs[8];
-    int cbvArgsCount;
+    UINT cbvArgsCount;
+    UINT constantsRangesCount;
     DX12Device* device;
 
     void DrawObject(ID3D12GraphicsCommandList7* gCommandBuffer, UINT currentSet);
+};
+
+
+
+struct DX12PipelineCreationInfo
+{
+    EntryHandle rootSignature;
+    EntryHandle pipelineState;
+    UINT heapsCounts;
+    EntryHandle* descriptorHeapHandles;
+    UINT descriptorTableCount;
+    DX12DescriptorTableBindings* tables;
+    D3D_PRIMITIVE_TOPOLOGY topology;
+    UINT instanceCount;
+    EntryHandle vertexBufferHandle;
+    SIZE_T vertexBufferOffset;
+    SIZE_T vertexBufferSize;
+    UINT vertexSize;
+    UINT vertexCount;
+    EntryHandle indexBuffer;
+    SIZE_T indexBufferOffset;
+    SIZE_T indexBufferSize;
+    UINT indexSize;
+    UINT indexCount;
+    UINT cbvArgsCount;
 };
 
 struct DX12PipelineStateObjectCreate
@@ -417,13 +423,13 @@ struct DX12Device
 
     ID3D12Device2* deviceHandle;
 
-    char deviceData[4096];
+    char deviceData[4096*8];
 
-    char deviceCache[4096];
+    char deviceCache[4096*4];
 
     uintptr_t memHandleSlots[80];
 
-    PoolItem deviceHandlePool[80];
+    DX12PoolItem deviceHandlePool[80];
 
     EntryHandle handlesPointer = 0;
 
@@ -469,7 +475,7 @@ struct DX12Device
 
     EntryHandle CreateCommittedImageResource(UINT width, UINT height, UINT depth, UINT mips, D3D12_RESOURCE_FLAGS flags, DXGI_FORMAT format, D3D12_RESOURCE_DIMENSION dimension);
 
-    void CreateCBVDescriptorHandle(EntryHandle bufferPoolHandle, SIZE_T offset, SIZE_T size, DescriptorHeapManager* heap, UINT heapIndex);
+    void CreateCBVDescriptorHandle(EntryHandle bufferPoolHandle, SIZE_T offset, SIZE_T size, DX12DescriptorHeapManager* heap, UINT heapIndex);
 
     EntryHandle CreateDSVRSVMemoryPool(SIZE_T sizeOfPool, SIZE_T alignment, bool msaa);
 
@@ -489,21 +495,25 @@ struct DX12Device
 
     ID3D12Heap* CreateDX12Heap(SIZE_T size, SIZE_T alignment, D3D12_HEAP_FLAGS heapFlags, D3D12_HEAP_TYPE heapType);
 
-    void CreateImageSampler(DescriptorHeapManager* samplerDescriptorHeap, UINT heapIndex);
+    void CreateImageSampler(DX12DescriptorHeapManager* samplerDescriptorHeap, UINT heapIndex);
 
-    void CreateImageSRVDescriptorHandle(EntryHandle bufferPoolHandle, UINT mipsLevels, DXGI_FORMAT format, DescriptorHeapManager* heap, UINT heapIndex, D3D12_SRV_DIMENSION dimension);
+    void CreateImageSRVDescriptorHandle(EntryHandle bufferPoolHandle, UINT mipsLevels, DXGI_FORMAT format, DX12DescriptorHeapManager* heap, UINT heapIndex, D3D12_SRV_DIMENSION dimension);
 
     EntryHandle CreateImageMemoryPool(SIZE_T sizeOfPool, SIZE_T alignment, D3D12_HEAP_FLAGS heapFlags, D3D12_HEAP_TYPE heapType);
 
+    EntryHandle CreateSampledImageHandle(EntryHandle poolIdx, UINT width, UINT height, UINT depth, UINT mips, DXGI_FORMAT format, D3D12_RESOURCE_DIMENSION dimension);
+
     EntryHandle CreateImageResourceFromPool(EntryHandle poolIdx, UINT width, UINT height, UINT depth, UINT mips, D3D12_RESOURCE_FLAGS flags, DXGI_FORMAT format, D3D12_RESOURCE_DIMENSION dimension);
 
-    ID3D12Resource* CreatePlacedImageResource(ImageMemoryPool* pool, UINT width, UINT height, UINT depth, UINT mips, D3D12_RESOURCE_FLAGS flags, DXGI_FORMAT format, D3D12_RESOURCE_DIMENSION dimension);
+    EntryHandle CreateGraphicsPipelineObject(DX12PipelineCreationInfo* info, DX12ConstantBufferPipelineArguments* constantArgs);
+
+    ID3D12Resource* CreatePlacedImageResource(DX12ImageMemoryPool* pool, UINT width, UINT height, UINT depth, UINT mips, D3D12_RESOURCE_FLAGS flags, DXGI_FORMAT format, D3D12_RESOURCE_DIMENSION dimension);
 
     int CreateRenderTargetView(EntryHandle swapChainIdx, EntryHandle descriptorHeapIdx, EntryHandle* outBuffers, UINT imageCount);
 
     EntryHandle CreateRootSignature(DX12RootSignatureCreate* createInfo, D3D12_ROOT_SIGNATURE_FLAGS flags);
 
-    void CreateBufferSRVDescriptorHandle(EntryHandle bufferPoolHandle, SIZE_T  offset, UINT numCount, SIZE_T size, DXGI_FORMAT format, DescriptorHeapManager* heap, UINT heapIndex, D3D12_SRV_DIMENSION dimension);
+    void CreateBufferSRVDescriptorHandle(EntryHandle bufferPoolHandle, SIZE_T  offset, UINT numCount, SIZE_T size, DXGI_FORMAT format, DX12DescriptorHeapManager* heap, UINT heapIndex, D3D12_SRV_DIMENSION dimension);
 
     EntryHandle CreateShaderBlob(const char* shaderfile);
 
@@ -512,7 +522,7 @@ struct DX12Device
 
     EntryHandle CreateTextureMemoryPool(SIZE_T sizeOfPool, SIZE_T alignment);
 
-    void CreateBufferUAVDescriptorHandle(EntryHandle bufferPoolHandle, SIZE_T  offset, UINT numCount, SIZE_T size,SIZE_T  counterOffsetInBytes, DXGI_FORMAT format, DescriptorHeapManager* heap, UINT heapIndex, D3D12_BUFFER_UAV_FLAGS uavFlags);
+    void CreateBufferUAVDescriptorHandle(EntryHandle bufferPoolHandle, SIZE_T  offset, UINT numCount, SIZE_T size,SIZE_T  counterOffsetInBytes, DXGI_FORMAT format, DX12DescriptorHeapManager* heap, UINT heapIndex, D3D12_BUFFER_UAV_FLAGS uavFlags);
 
     EntryHandle CreateDeviceBuffer(UINT size, DXGI_FORMAT format, D3D12_RESOURCE_FLAGS flags);
 
@@ -571,7 +581,7 @@ struct DX12Device
     }
 
 
-    DX12CPUDescriptorHandle GetCPUHandleFromDescriptorManager(DescriptorHeapManager* heapManager)
+    DX12CPUDescriptorHandle GetCPUHandleFromDescriptorManager(DX12DescriptorHeapManager* heapManager)
     {
         ID3D12DescriptorHeap* heap = (ID3D12DescriptorHeap*)GetAndValidateItem(heapManager->descriptorHeap, D12DESCRIPTORHEAP);
 
