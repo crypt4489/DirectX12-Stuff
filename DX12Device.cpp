@@ -321,8 +321,9 @@ int DX12Device::CreateRenderTargetView(EntryHandle swapChainIdx, EntryHandle des
 {
     UINT rtvDescriptorSize = deviceHandle->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
 
+    DX12DescriptorHeapManager* heapManager = (DX12DescriptorHeapManager*)GetAndValidateItem(descriptorHeapIdx, D12DESCRIPTORMANAGER);
     IDXGISwapChain4* swapChain = (IDXGISwapChain4*)GetAndValidateItem(swapChainIdx, DXGISWAPCHAIN);
-    ID3D12DescriptorHeap* heap = (ID3D12DescriptorHeap*)GetAndValidateItem(descriptorHeapIdx, D12DESCRIPTORHEAP);
+    ID3D12DescriptorHeap* heap = (ID3D12DescriptorHeap*)GetAndValidateItem(heapManager->descriptorHeap, D12DESCRIPTORHEAP);
 
     DX12CPUDescriptorHandle rtvHandle(heap->GetCPUDescriptorHandleForHeapStart());
 
@@ -341,6 +342,8 @@ int DX12Device::CreateRenderTargetView(EntryHandle swapChainIdx, EntryHandle des
         rtvHandle.Advance(1, rtvDescriptorSize);
 
         outBuffers[i] = AllocTypeForEntry(backBuffer, D12RESOURCEHANDLE);
+
+        heapManager->descriptorHeapHandlePointer++;
     }
 
     return 0;
@@ -406,10 +409,11 @@ EntryHandle DX12Device::CreateDSVRSVMemoryPool(SIZE_T sizeOfPool, SIZE_T alignme
 
 int DX12Device::CreateDepthStencilView(EntryHandle descriptorHeapIdx, EntryHandle poolIdx, EntryHandle* outBuffers, UINT imageCount, UINT width, UINT height, DXGI_FORMAT format, UINT sampleCount)
 {
-
     UINT dsvDescriptorSize = deviceHandle->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_DSV);
 
-    ID3D12DescriptorHeap* descHeap = (ID3D12DescriptorHeap*)GetAndValidateItem(descriptorHeapIdx, D12DESCRIPTORHEAP);
+    DX12DescriptorHeapManager* heapManager = (DX12DescriptorHeapManager*)GetAndValidateItem(descriptorHeapIdx, D12DESCRIPTORMANAGER);
+
+    ID3D12DescriptorHeap* descHeap = (ID3D12DescriptorHeap*)GetAndValidateItem(heapManager->descriptorHeap, D12DESCRIPTORHEAP);
 
     DX12ImageMemoryPool* pool = (DX12ImageMemoryPool*)GetAndValidateItem(poolIdx, D12IMAGEMEMORYPOOL);
 
@@ -463,6 +467,8 @@ int DX12Device::CreateDepthStencilView(EntryHandle descriptorHeapIdx, EntryHandl
         dsvHandle.Advance(1, dsvDescriptorSize);
 
         outBuffers[i] = AllocTypeForEntry(depthBuffer, D12RESOURCEHANDLE);
+
+        heapManager->descriptorHeapHandlePointer++;
     }
 
     return 0;
@@ -864,17 +870,13 @@ void DX12Device::WriteToHostMemory(EntryHandle memoryBuffer, void* data, SIZE_T 
     buffer->Unmap(0, nullptr);
 }
 
-void DX12Device::WriteToDeviceLocalMemory(EntryHandle deviceLocalMemBuffer, EntryHandle stagingBufferIndex, EntryHandle transferCommandBuffer, void* data, SIZE_T size, SIZE_T offset, SIZE_T stride, int copies)
+void DX12Device::WriteToDeviceLocalMemory(EntryHandle deviceLocalMemBuffer, EntryHandle stagingBufferIndex, DX12GraphicsCommandRecorder* commandRecorder, void* data, SIZE_T size, SIZE_T offset, SIZE_T stride, int copies)
 {
-    ID3D12GraphicsCommandList7* transCommandBuffer = (ID3D12GraphicsCommandList7*)GetAndValidateItem(transferCommandBuffer, D12COMMANDBUFFER7);
-
     DX12DriverMemoryBuffer* dmb = (DX12DriverMemoryBuffer*)GetAndValidateItem(deviceLocalMemBuffer, D12BUFFERMEMORYPOOL);
 
-    ID3D12Resource* dlBuffer = (ID3D12Resource*)GetAndValidateItem(dmb->bufferHandle, D12RESOURCEHANDLE);
+    DX12DriverMemoryBuffer* stagingDmb = (DX12DriverMemoryBuffer*)GetAndValidateItem(stagingBufferIndex, D12BUFFERMEMORYPOOL);
 
-    DX12DriverMemoryBuffer* dmb2 = (DX12DriverMemoryBuffer*)GetAndValidateItem(stagingBufferIndex, D12BUFFERMEMORYPOOL);
-
-    ID3D12Resource* stagingBuffer = (ID3D12Resource*)GetAndValidateItem(dmb2->bufferHandle, D12RESOURCEHANDLE);
+    ID3D12Resource* stagingBuffer = (ID3D12Resource*)GetAndValidateItem(stagingDmb->bufferHandle, D12RESOURCEHANDLE);
 
     void* mappedData = nullptr;
 
@@ -889,9 +891,10 @@ void DX12Device::WriteToDeviceLocalMemory(EntryHandle deviceLocalMemBuffer, Entr
         memcpy((void*)(cdata), data, size);
         cdata += stride;
     }
+
     stagingBuffer->Unmap(0, nullptr);
 
-    transCommandBuffer->CopyBufferRegion(dlBuffer, offset, stagingBuffer, allocLoc, stride * copies);
+    commandRecorder->CopyBufferToRegion( stagingDmb->bufferHandle, dmb->bufferHandle, allocLoc, offset, stride * copies);
 }
 
 void DX12Device::TransitionBufferBarrier(EntryHandle cmdBufferHandle, EntryHandle resourceHandle, D3D12_BARRIER_SYNC srcSync, D3D12_BARRIER_ACCESS srcAccess, D3D12_BARRIER_SYNC dstSync, D3D12_BARRIER_ACCESS dstAccess)
@@ -946,7 +949,7 @@ void DX12Device::TransitionImageResource(ID3D12GraphicsCommandList7* cmdBuffer, 
     cmdBuffer->Barrier(1, &barrierGroup);
 }
 
-void DX12Device::WriteToImageDeviceLocalMemory(EntryHandle imageHandle, EntryHandle commandBufferIndex, EntryHandle stagingBufferIndex, char* data,
+void DX12Device::WriteToImageDeviceLocalMemory(EntryHandle imageHandle, DX12GraphicsCommandRecorder* commandRecorder, EntryHandle stagingBufferIndex, char* data,
     UINT width, UINT height,
     UINT componentCount, UINT totalImageSize,
     DXGI_FORMAT format,
@@ -979,10 +982,7 @@ void DX12Device::WriteToImageDeviceLocalMemory(EntryHandle imageHandle, EntryHan
 
     ID3D12Resource* imageResourceHandle = (ID3D12Resource*)GetAndValidateItem(imageHandleT->resourceIndex, D12RESOURCEHANDLE);
 
-    ID3D12GraphicsCommandList7* cmdBuffer = (ID3D12GraphicsCommandList7*)GetAndValidateItem(commandBufferIndex, D12COMMANDBUFFER7);
-
-
-    TransitionImageResource(cmdBuffer, imageResourceHandle,
+    commandRecorder->TransitionImageResource(imageResourceHandle,
         D3D12_BARRIER_SYNC_NONE, D3D12_BARRIER_ACCESS_NO_ACCESS,
         D3D12_BARRIER_SYNC_COPY, D3D12_BARRIER_ACCESS_COPY_DEST,
         D3D12_BARRIER_LAYOUT_COMMON, D3D12_BARRIER_LAYOUT_COPY_DEST,
@@ -991,7 +991,6 @@ void DX12Device::WriteToImageDeviceLocalMemory(EntryHandle imageHandle, EntryHan
 
     D3D12_TEXTURE_COPY_LOCATION dest{}, src{};
 
-    src.pResource = stagingBuffer;
     src.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
     src.PlacedFootprint.Offset = allocLoc;
     src.PlacedFootprint.Footprint.Depth = 1;
@@ -1000,14 +999,12 @@ void DX12Device::WriteToImageDeviceLocalMemory(EntryHandle imageHandle, EntryHan
     src.PlacedFootprint.Footprint.Format = format;
     src.PlacedFootprint.Footprint.RowPitch = stride;
 
-
-    dest.pResource = imageResourceHandle;
     dest.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
     dest.SubresourceIndex = 0;
 
-    cmdBuffer->CopyTextureRegion(&dest, 0, 0, 0, &src, NULL);
+    commandRecorder->CopyTextureRegion(&src, &dest, dmb->bufferHandle, imageHandleT->resourceIndex, NULL, 0, 0, 0);
 
-    TransitionImageResource(cmdBuffer, imageResourceHandle,
+    commandRecorder->TransitionImageResource(imageResourceHandle,
         D3D12_BARRIER_SYNC_COPY, D3D12_BARRIER_ACCESS_COPY_DEST,
         D3D12_BARRIER_SYNC_PIXEL_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE,
 
@@ -1330,90 +1327,273 @@ UINT DX12Device::GetDescriptorHeapSizeFromManager(EntryHandle managerIndex)
     return heapManager->descriptorHeapHandleSize;
 }
 
-void DX12GraphicsPipelineObject::DrawObject(ID3D12GraphicsCommandList7* gCommandBuffer, UINT currentSet)
+DX12GraphicsCommandRecorder DX12Device::CreateRecorder(EntryHandle commandListIndex, EntryHandle commandPoolIndex)
 {
-    ID3D12RootSignature* sign = (ID3D12RootSignature*)device->GetAndValidateItem(rootSignature, D12ROOTSIGNATURE);
+    DX12GraphicsCommandRecorder recorder{};
 
-    gCommandBuffer->SetGraphicsRootSignature(sign);
+    recorder.device = this;
+    recorder.commandPool = (ID3D12CommandAllocator*)GetAndValidateItem(commandPoolIndex, D12COMMANDPOOL);
+    recorder.cmdList = (ID3D12GraphicsCommandList7*)GetAndValidateItem(commandListIndex, D12COMMANDBUFFER7);
 
+    return recorder;
+}
 
-    ID3D12DescriptorHeap** heaps = (ID3D12DescriptorHeap**)device->AllocFromDeviceCache(sizeof(ID3D12DescriptorHeap*) * heapsCount, 4);
+void DX12GraphicsPipelineObject::DrawObject(DX12GraphicsCommandRecorder* gCommandBuffer, UINT currentSet)
+{
+    gCommandBuffer->SetRootSignature(rootSignature);
 
-    UINT* heapSizes = (UINT*)device->AllocFromDeviceCache(sizeof(UINT) * heapsCount, 4);
+    gCommandBuffer->SetDescriptorHeaps(descriptorHeap, heapsCount);
+    
+    gCommandBuffer->SetPipelineState(pipelineState);
 
-    for (UINT j = 0; j < heapsCount; j++)
-    {
-        heaps[j] = (ID3D12DescriptorHeap*)device->GetDescriptorHeapFromManager(descriptorHeap[j]);
-        heapSizes[j] = device->GetDescriptorHeapSizeFromManager(descriptorHeap[j]);
-    }
-
-    gCommandBuffer->SetDescriptorHeaps(heapsCount, heaps);
-
-    ID3D12PipelineState* pipelineStateHandle = (ID3D12PipelineState*)device->GetAndValidateItem(pipelineState, D12PIPELINESTATE);
-
-    gCommandBuffer->SetPipelineState(pipelineStateHandle);
-    gCommandBuffer->IASetPrimitiveTopology(topology);
+    gCommandBuffer->SetPrimitiveTopology(topology);
 
     UINT pushArgsCount = cbvArgsCount;
+
     UINT pushRangeCount = constantsRangesCount;
 
     for (UINT j = 0; j < pushArgsCount; j++)
     {
         DX12ConstantBufferPipelineArguments* pipeArgs = &cbvArgs[j];
-        gCommandBuffer->SetGraphicsRoot32BitConstants(
+        gCommandBuffer->Set32BitConstants(
             pipeArgs->rootParamIndex,
-            pipeArgs->sizeInBytes / 4,
-            pipeArgs->data,
-            pipeArgs->offsetInBytes / 4
+            pipeArgs->sizeInBytes,
+            pipeArgs->offsetInBytes,
+            pipeArgs->data
         );
     }
 
     for (UINT j = pushRangeCount; j < pushRangeCount +descriptorTableCount; j++)
     {
-        UINT descripotrTableIndex = j - pushRangeCount;
-        UINT descriptorTableSize = tables[descripotrTableIndex].descriptorsCount;
-        UINT descriptorTablesBase = tables[descripotrTableIndex].descriptorHeapBase;
-        UINT heapindex = tables[descripotrTableIndex].descriptorHeapSelection;
-
+        UINT descriptorTableIndex = j - pushRangeCount;
+        UINT descriptorTableSize = tables[descriptorTableIndex].descriptorsCount;
+        UINT descriptorTablesBase = tables[descriptorTableIndex].descriptorHeapBase;
+        UINT heapindex = tables[descriptorTableIndex].descriptorHeapSelection;
         UINT descriptorTableOffset = descriptorTablesBase + (currentSet * descriptorTableSize);
 
-
-        DX12GPUDescriptorHandle handle = DX12GPUDescriptorHandle(heaps[heapindex]->GetGPUDescriptorHandleForHeapStart(), descriptorTableOffset, heapSizes[heapindex]);
-        gCommandBuffer->SetGraphicsRootDescriptorTable(j, handle);
+        gCommandBuffer->SetDescriptorTable(j, descriptorHeap[tables[descriptorTableIndex].descriptorHeapSelection], descriptorTableOffset);
     }
 
     if (vertexBuffer != ~0ui64)
     {
-        D3D12_VERTEX_BUFFER_VIEW vertexView{};
-
-        ID3D12Resource* vertexBufferHandle = (ID3D12Resource*)device->GetAndValidateItem(vertexBuffer, D12RESOURCEHANDLE);
-
-        vertexView.BufferLocation = vertexBufferHandle->GetGPUVirtualAddress() + vertexBufferOffset;
-        vertexView.SizeInBytes = (UINT)vertexBufferSize;
-        vertexView.StrideInBytes = vertexSize;
-
-        gCommandBuffer->IASetVertexBuffers(0, 1, &vertexView);
+        gCommandBuffer->SetVertexBuffers(&vertexBuffer, &vertexBufferSize, &vertexBufferOffset, &vertexSize, 1);
     }
 
     if (indexBuffer != ~0ui64)
     {
-
-        D3D12_INDEX_BUFFER_VIEW indexView{};
-
-        ID3D12Resource* indexBufferHandle = (ID3D12Resource*)device->GetAndValidateItem(indexBuffer, D12RESOURCEHANDLE);
-
-        indexView.BufferLocation = indexBufferHandle->GetGPUVirtualAddress() + indexBufferOffset;
-        indexView.SizeInBytes = (UINT)indexBufferSize;
-        indexView.Format = (indexSize == 2) ? DXGI_FORMAT_R16_UINT : DXGI_FORMAT_R32_UINT;
-
-        gCommandBuffer->IASetIndexBuffer(&indexView);
+        gCommandBuffer->SetIndexBuffers(indexBuffer, indexBufferOffset, indexBufferSize, indexSize);
 
         gCommandBuffer->DrawIndexedInstanced(indexCount, instanceCount, 0, 0, 0);
-
     }
     else
     {
         gCommandBuffer->DrawInstanced(vertexCount, instanceCount, 0, 0);
     }
 
+}
+
+/*struct DX12GraphicsCommandRecorder
+{
+    ID3D12GraphicsCommandList* cmdList;
+    ID3D12CommandAllocator* commandPool;
+    EntryHandle fenceVal = ~0ui64;
+    DX12Device* device;
+*/
+void DX12GraphicsCommandRecorder::SetDescriptorHeaps(EntryHandle* heaps, UINT heapCount)
+{
+    ID3D12DescriptorHeap** heapsHandles = (ID3D12DescriptorHeap**)device->AllocFromDeviceCache(sizeof(ID3D12DescriptorHeap*) * heapCount, 4);
+
+    for (UINT j = 0; j < heapCount; j++)
+    {
+        heapsHandles[j] = (ID3D12DescriptorHeap*)device->GetDescriptorHeapFromManager(heaps[j]);
+    }
+
+    cmdList->SetDescriptorHeaps(heapCount, heapsHandles);
+}
+
+void DX12GraphicsCommandRecorder::SetPipelineState(EntryHandle pipelineState)
+{
+    ID3D12PipelineState* pipelineStateHandle = (ID3D12PipelineState*)device->GetAndValidateItem(pipelineState, D12PIPELINESTATE);
+
+    cmdList->SetPipelineState(pipelineStateHandle);
+}
+
+void DX12GraphicsCommandRecorder::SetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY topology)
+{
+    cmdList->IASetPrimitiveTopology(topology);
+}
+
+void DX12GraphicsCommandRecorder::SetVertexBuffers(EntryHandle* vertexBufferIds, SIZE_T* vertexBufferSizes, SIZE_T* vertexBufferOffsets, UINT* vertexStrides, UINT vertexBufferCount)
+{
+    D3D12_VERTEX_BUFFER_VIEW *vertexViews = (D3D12_VERTEX_BUFFER_VIEW*)device->AllocFromDeviceCache(sizeof(D3D12_VERTEX_BUFFER_VIEW)*vertexBufferCount, alignof(D3D12_VERTEX_BUFFER_VIEW));
+
+    for (UINT i = 0; i < vertexBufferCount; i++)
+    {
+        ID3D12Resource* vertexBufferHandle = (ID3D12Resource*)device->GetAndValidateItem(vertexBufferIds[i], D12RESOURCEHANDLE);
+
+        vertexViews[i].BufferLocation = vertexBufferHandle->GetGPUVirtualAddress() + vertexBufferOffsets[i];
+        vertexViews[i].SizeInBytes = (UINT)vertexBufferSizes[i];
+        vertexViews[i].StrideInBytes = vertexStrides[i];
+    }
+
+    cmdList->IASetVertexBuffers(0, vertexBufferCount, vertexViews);
+}
+
+void DX12GraphicsCommandRecorder::SetIndexBuffers(EntryHandle indexBufferId, SIZE_T indexBufferOffset, SIZE_T indexBufferSize, UINT indexStride)
+{
+    D3D12_INDEX_BUFFER_VIEW indexView{};
+
+    ID3D12Resource* indexBufferHandle = (ID3D12Resource*)device->GetAndValidateItem(indexBufferId, D12RESOURCEHANDLE);
+
+    indexView.BufferLocation = indexBufferHandle->GetGPUVirtualAddress() + indexBufferOffset;
+    indexView.SizeInBytes = (UINT)indexBufferSize;
+    indexView.Format = (indexStride == 2) ? DXGI_FORMAT_R16_UINT : DXGI_FORMAT_R32_UINT;
+
+    cmdList->IASetIndexBuffer(&indexView);
+}
+
+void DX12GraphicsCommandRecorder::DrawIndexedInstanced(UINT indexCount, UINT instanceCount, UINT startingIndex, UINT startingVertex, UINT firstInstance)
+{
+    cmdList->DrawIndexedInstanced(indexCount, instanceCount, startingIndex, startingVertex, firstInstance);
+}
+
+void DX12GraphicsCommandRecorder::DrawInstanced(UINT vertexCount, UINT instanceCount, UINT startingVertex, UINT firstInstance)
+{
+    cmdList->DrawInstanced(vertexCount, instanceCount, startingVertex, firstInstance);
+}
+
+void DX12GraphicsCommandRecorder::Set32BitConstants(UINT rootParamIndex, UINT sizeInBytes, UINT offsetInBytes, void* data)
+{
+    cmdList->SetGraphicsRoot32BitConstants(
+        rootParamIndex,
+        sizeInBytes / 4,
+        data,
+        offsetInBytes / 4
+    );
+}
+
+void DX12GraphicsCommandRecorder::SetDescriptorTable(UINT rootParam, EntryHandle heapIdx, UINT offsetInDescriptorHeap)
+{
+    DX12GPUDescriptorHandle handle = device->GetGPUHandleFromDescriptorManager(heapIdx, offsetInDescriptorHeap);
+    cmdList->SetGraphicsRootDescriptorTable(rootParam, handle);
+}
+
+void DX12GraphicsCommandRecorder::SetRootSignature(EntryHandle rootIndex)
+{
+    ID3D12RootSignature* sign = (ID3D12RootSignature*)device->GetAndValidateItem(rootIndex, D12ROOTSIGNATURE);
+
+    cmdList->SetGraphicsRootSignature(sign);
+}
+
+void DX12GraphicsCommandRecorder::ResetCommandBuffer()
+{
+    cmdList->Reset(commandPool, nullptr);
+}
+
+void DX12GraphicsCommandRecorder::ResetCommandPool()
+{
+    commandPool->Reset();
+}
+
+void DX12GraphicsCommandRecorder::ResetCommandPoolandBuffer()
+{
+    ResetCommandPool(); //this order matters
+    ResetCommandBuffer();
+}
+void DX12GraphicsCommandRecorder::SetViewports(UINT viewportCount, D3D12_VIEWPORT* viewports)
+{
+    cmdList->RSSetViewports(viewportCount, viewports);
+}
+
+void DX12GraphicsCommandRecorder::SetScissor(UINT scissorCount, D3D12_RECT* rects)
+{
+    cmdList->RSSetScissorRects(scissorCount, rects);
+}
+
+void DX12GraphicsCommandRecorder::BeginRenderPass(UINT numRenderTargets, D3D12_RENDER_PASS_RENDER_TARGET_DESC* renderTargetDescriptions, D3D12_RENDER_PASS_DEPTH_STENCIL_DESC* depthDesc, D3D12_RENDER_PASS_FLAGS renderPassFlags)
+{
+    cmdList->BeginRenderPass(1, renderTargetDescriptions, depthDesc, renderPassFlags);
+}
+
+void DX12GraphicsCommandRecorder::EndRenderPass()
+{
+    cmdList->EndRenderPass();
+}
+
+int DX12GraphicsCommandRecorder::CloseCommandBuffer()
+{
+    if (FAILED(cmdList->Close()))
+    {
+        return -1;
+    }
+    return 0;
+}
+
+void DX12GraphicsCommandRecorder::TransitionImageResource(ID3D12Resource* imageResource,
+    D3D12_BARRIER_SYNC srcSync, D3D12_BARRIER_ACCESS srcAccess,
+    D3D12_BARRIER_SYNC dstSync, D3D12_BARRIER_ACCESS dstAccess, D3D12_BARRIER_LAYOUT srcLayout, D3D12_BARRIER_LAYOUT dstLayout, UINT baseArrayIndex, UINT numArrayLayers, UINT baseMipIndex, UINT numMipLevels)
+{
+    D3D12_TEXTURE_BARRIER barrierInfo{};
+    barrierInfo.Flags = D3D12_TEXTURE_BARRIER_FLAG_NONE;
+    barrierInfo.pResource = imageResource;
+    barrierInfo.Subresources.FirstArraySlice = baseArrayIndex;
+    barrierInfo.Subresources.IndexOrFirstMipLevel = baseMipIndex;
+    barrierInfo.Subresources.FirstPlane = 0;
+    barrierInfo.Subresources.NumArraySlices = numArrayLayers;
+    barrierInfo.Subresources.NumMipLevels = numMipLevels;
+    barrierInfo.Subresources.NumPlanes = 1;
+    barrierInfo.SyncBefore = srcSync;
+    barrierInfo.SyncAfter = dstSync;
+    barrierInfo.AccessBefore = srcAccess;
+    barrierInfo.AccessAfter = dstAccess;
+    barrierInfo.LayoutBefore = srcLayout;
+    barrierInfo.LayoutAfter = dstLayout;
+
+    D3D12_BARRIER_GROUP barrierGroup = {};
+    barrierGroup.Type = D3D12_BARRIER_TYPE_TEXTURE;
+    barrierGroup.NumBarriers = 1;
+    barrierGroup.pTextureBarriers = &barrierInfo;
+
+    cmdList->Barrier(1, &barrierGroup);
+}
+
+void DX12GraphicsCommandRecorder::TransitionBufferBarrier(EntryHandle resourceHandle, D3D12_BARRIER_SYNC srcSync, D3D12_BARRIER_ACCESS srcAccess, D3D12_BARRIER_SYNC dstSync, D3D12_BARRIER_ACCESS dstAccess)
+{
+    ID3D12Resource* resource = (ID3D12Resource*)device->GetAndValidateItem(resourceHandle, D12RESOURCEHANDLE);
+
+    D3D12_BUFFER_BARRIER barrierInfo{};
+    barrierInfo.pResource = resource;
+    barrierInfo.SyncBefore = srcSync;
+    barrierInfo.SyncAfter = dstSync;
+    barrierInfo.AccessBefore = srcAccess;
+    barrierInfo.AccessAfter = dstAccess;
+    barrierInfo.Offset = 0;
+    barrierInfo.Size = UINT64_MAX;
+
+    D3D12_BARRIER_GROUP barrierGroup = {};
+    barrierGroup.Type = D3D12_BARRIER_TYPE_BUFFER;
+    barrierGroup.NumBarriers = 1;
+    barrierGroup.pBufferBarriers = &barrierInfo;
+
+    cmdList->Barrier(1, &barrierGroup);
+}
+
+void DX12GraphicsCommandRecorder::CopyBufferToRegion(EntryHandle srcResource, EntryHandle dstResource, UINT64 srcOffset, UINT64 dstOffset, UINT64 numBytes)
+{
+    ID3D12Resource* srcResourceHandle = (ID3D12Resource*)device->GetAndValidateItem(srcResource, D12RESOURCEHANDLE);
+    ID3D12Resource* dstResourceHandle = (ID3D12Resource*)device->GetAndValidateItem(dstResource, D12RESOURCEHANDLE);
+
+    cmdList->CopyBufferRegion(dstResourceHandle, dstOffset, srcResourceHandle, srcOffset, numBytes);
+}
+
+
+void DX12GraphicsCommandRecorder::CopyTextureRegion(D3D12_TEXTURE_COPY_LOCATION* src, D3D12_TEXTURE_COPY_LOCATION* dest, EntryHandle srcResource, EntryHandle dstResource, D3D12_BOX* box, UINT x, UINT y, UINT z)
+{
+    ID3D12Resource* srcResourceHandle = (ID3D12Resource*)device->GetAndValidateItem(srcResource, D12RESOURCEHANDLE);
+    ID3D12Resource* dstResourceHandle = (ID3D12Resource*)device->GetAndValidateItem(dstResource, D12RESOURCEHANDLE);
+
+    src->pResource = srcResourceHandle;
+    dest->pResource = dstResourceHandle;
+  
+    cmdList->CopyTextureRegion(dest, x, y, z, src, box);
 }

@@ -106,6 +106,45 @@ struct DX12ImageHandle
     DXGI_FORMAT format;
 };
 
+struct DX12SamplerHandle
+{
+
+};
+
+struct DX12GraphicsCommandRecorder
+{
+    ID3D12GraphicsCommandList7* cmdList;
+    ID3D12CommandAllocator* commandPool;
+    EntryHandle fenceVal = ~0ui64;
+    DX12Device* device;
+
+
+    void BeginRenderPass(UINT numRenderTargets, D3D12_RENDER_PASS_RENDER_TARGET_DESC* renderTargetDescriptions, D3D12_RENDER_PASS_DEPTH_STENCIL_DESC* depthDesc, D3D12_RENDER_PASS_FLAGS renderPassFlags);
+    void EndRenderPass();
+    int CloseCommandBuffer();
+    void SetRootSignature(EntryHandle rootIndex);
+    void SetDescriptorHeaps(EntryHandle* heaps, UINT heapCount);
+    void SetPipelineState(EntryHandle pipelineState);
+    void SetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY topology);
+    void SetVertexBuffers(EntryHandle* vertexBufferIds, SIZE_T* vertexBufferSizes, SIZE_T* vertexBufferOffsets, UINT* vertexStrides, UINT vertexBufferCount);
+    void SetIndexBuffers(EntryHandle indexBufferId, SIZE_T indexBufferOffset, SIZE_T indexBufferSize, UINT indexStride);
+    void DrawIndexedInstanced(UINT indexCount, UINT instanceCount, UINT startingIndex, UINT startingVertex, UINT firstInstance);
+    void DrawInstanced(UINT vertexCount, UINT instanceCount, UINT startingVertex, UINT firstInstance);
+    void Set32BitConstants(UINT rootParamIndex, UINT sizeInBytes, UINT offsetInBytes, void* data);
+    void SetDescriptorTable(UINT rootParam, EntryHandle heapIdx, UINT offsetInDescriptorHeap);
+    void ResetCommandBuffer();
+    void ResetCommandPool();
+    void ResetCommandPoolandBuffer();
+    void SetViewports(UINT viewportCount, D3D12_VIEWPORT* viewports);
+    void SetScissor(UINT scissorCount, D3D12_RECT* rects);
+    void TransitionImageResource(ID3D12Resource* imageResource,
+        D3D12_BARRIER_SYNC srcSync, D3D12_BARRIER_ACCESS srcAccess,
+        D3D12_BARRIER_SYNC dstSync, D3D12_BARRIER_ACCESS dstAccess, D3D12_BARRIER_LAYOUT srcLayout, D3D12_BARRIER_LAYOUT dstLayout, UINT baseArrayIndex, UINT numArrayLayers, UINT baseMipIndex, UINT numMipLevels);
+
+    void TransitionBufferBarrier(EntryHandle resourceHandle, D3D12_BARRIER_SYNC srcSync, D3D12_BARRIER_ACCESS srcAccess, D3D12_BARRIER_SYNC dstSync, D3D12_BARRIER_ACCESS dstAccess);
+    void CopyBufferToRegion(EntryHandle srcResource, EntryHandle dstResource, UINT64 srcOffset, UINT64 dstOffset, UINT64 numBytes);
+    void CopyTextureRegion(D3D12_TEXTURE_COPY_LOCATION* src, D3D12_TEXTURE_COPY_LOCATION* dest, EntryHandle srcResource, EntryHandle dstResource, D3D12_BOX* box, UINT x, UINT y, UINT z);
+};
 
 struct DX12DescriptorTableBindings
 {
@@ -140,7 +179,7 @@ struct DX12GraphicsPipelineObject
     UINT constantsRangesCount;
     DX12Device* device;
 
-    void DrawObject(ID3D12GraphicsCommandList7* gCommandBuffer, UINT currentSet);
+    void DrawObject(DX12GraphicsCommandRecorder* gCommandBuffer, UINT currentSet);
 };
 
 
@@ -418,6 +457,8 @@ struct DX12GPUDescriptorHandle
 };
 
 
+
+
 struct DX12Device
 {
 
@@ -471,6 +512,9 @@ struct DX12Device
     EntryHandle CreateCommandList(EntryHandle commandAllocator, D3D12_COMMAND_LIST_TYPE type);
 
     ID3D12CommandQueue* CreateCommandQueue(ID3D12Device2* device, D3D12_COMMAND_LIST_TYPE type);
+
+    DX12GraphicsCommandRecorder CreateRecorder(EntryHandle commandListIndex, EntryHandle commandPoolIndex);
+
     EntryHandle CreateCommandQueue(D3D12_COMMAND_LIST_TYPE type);
 
     EntryHandle CreateCommittedImageResource(UINT width, UINT height, UINT depth, UINT mips, D3D12_RESOURCE_FLAGS flags, DXGI_FORMAT format, D3D12_RESOURCE_DIMENSION dimension);
@@ -550,11 +594,11 @@ struct DX12Device
 
     void WaitForFenceValue(EntryHandle fenceObjIndex, uint64_t fenceValue, DWORD duration);
 
-    void WriteToDeviceLocalMemory(EntryHandle deviceLocalMemBuffer, EntryHandle stagingBufferIndex, EntryHandle transferCommandBuffer, void* data, SIZE_T size, SIZE_T offset, SIZE_T stride, int copies);
+    void WriteToDeviceLocalMemory(EntryHandle deviceLocalMemBuffer, EntryHandle stagingBufferIndex, DX12GraphicsCommandRecorder* commandRecorder, void* data, SIZE_T size, SIZE_T offset, SIZE_T stride, int copies);
 
     void WriteToHostMemory(EntryHandle memoryBuffer, void* data, SIZE_T size, SIZE_T offset, SIZE_T stride, int copies);
 
-    void WriteToImageDeviceLocalMemory(EntryHandle imageResourceHandle, EntryHandle commandBufferIndex, EntryHandle stagingBufferIndex, char* data,
+    void WriteToImageDeviceLocalMemory(EntryHandle imageResourceHandle, DX12GraphicsCommandRecorder* commandRecorder, EntryHandle stagingBufferIndex, char* data,
         UINT width, UINT height,
         UINT componentCount, UINT totalImageSize,
         DXGI_FORMAT format,
@@ -580,12 +624,37 @@ struct DX12Device
         return AllocTypeForEntry(pipelineState, D12PIPELINESTATE);
     }
 
+    DX12CPUDescriptorHandle GetCPUHandleFromDescriptorManager(EntryHandle heapManagerHandle, UINT descriptorOffset)
+    {
+        DX12DescriptorHeapManager* heapManager = (DX12DescriptorHeapManager*)GetAndValidateItem(heapManagerHandle, D12DESCRIPTORMANAGER);
+
+        ID3D12DescriptorHeap* heap = (ID3D12DescriptorHeap*)GetAndValidateItem(heapManager->descriptorHeap, D12DESCRIPTORHEAP);
+
+        return DX12CPUDescriptorHandle(heap->GetCPUDescriptorHandleForHeapStart(), descriptorOffset, heapManager->descriptorHeapHandleSize);
+    }
+
+    DX12GPUDescriptorHandle GetGPUHandleFromDescriptorManager(EntryHandle heapManagerHandle, UINT descriptorOffset)
+    {
+        DX12DescriptorHeapManager* heapManager = (DX12DescriptorHeapManager*)GetAndValidateItem(heapManagerHandle, D12DESCRIPTORMANAGER);
+
+        ID3D12DescriptorHeap* heap = (ID3D12DescriptorHeap*)GetAndValidateItem(heapManager->descriptorHeap, D12DESCRIPTORHEAP);
+
+        return DX12GPUDescriptorHandle(heap->GetGPUDescriptorHandleForHeapStart(), descriptorOffset, heapManager->descriptorHeapHandleSize);
+    }
+
 
     DX12CPUDescriptorHandle GetCPUHandleFromDescriptorManager(DX12DescriptorHeapManager* heapManager)
     {
         ID3D12DescriptorHeap* heap = (ID3D12DescriptorHeap*)GetAndValidateItem(heapManager->descriptorHeap, D12DESCRIPTORHEAP);
 
         return DX12CPUDescriptorHandle(heap->GetCPUDescriptorHandleForHeapStart());
+    }
+
+    DX12GPUDescriptorHandle GetGPUHandleFromDescriptorManager(DX12DescriptorHeapManager* heapManager)
+    {
+        ID3D12DescriptorHeap* heap = (ID3D12DescriptorHeap*)GetAndValidateItem(heapManager->descriptorHeap, D12DESCRIPTORHEAP);
+
+        return DX12GPUDescriptorHandle(heap->GetGPUDescriptorHandleForHeapStart());
     }
 };
 

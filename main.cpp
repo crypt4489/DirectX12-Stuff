@@ -443,20 +443,16 @@ EntryHandle swapChainImages[MAX_FRAMES_IN_FLIGHT];
 
 EntryHandle swapChainDepthImages[MAX_FRAMES_IN_FLIGHT];
 
-EntryHandle graphicCommandBuffers[MAX_FRAMES_IN_FLIGHT];
-
 EntryHandle graphicCommandPools[MAX_FRAMES_IN_FLIGHT];
 
 EntryHandle transferCommandPool;
-EntryHandle transferCommandBuffer;
+DX12GraphicsCommandRecorder transferCommandRecorder;
+
 int transferCommandsUploaded = 0;
 
 EntryHandle globalRTVDescriptorHeap;
 EntryHandle globalDSVDescriptorHeap;
 
-
-UINT globalRTVDescriptorSize;
-UINT globalDSVDescriptorSize;
 UINT currentFrame = 0;
 UINT currentImageIndex = 0;
 
@@ -468,9 +464,11 @@ bool g_VSync = true;
 
 bool g_TearingSupported = false;
 
-
+EntryHandle storedRenderables[2];
 
 ShaderHandles shaderHandles[2]{};
+
+DX12GraphicsCommandRecorder commandRecorders[MAX_FRAMES_IN_FLIGHT];
 
 EntryHandle bgraImageMemoryPool;
 
@@ -691,17 +689,11 @@ EntryHandle CreateGraphicsPipelineObject(int* descriptorsets, int descCount, DX1
 
 }
 
-static EntryHandle storedRenderables[2];
+XMVECTOR color = { 1.0f, 0.0f, 0.0f, 1.0f };
 
 void DoSceneStuff()
 {
-    ID3D12CommandAllocator* transCommandPool = (ID3D12CommandAllocator*)deviceInstance.GetAndValidateItem(transferCommandPool, D12COMMANDPOOL);
-    
-    transCommandPool->Reset();
-
-    ID3D12GraphicsCommandList7* transCommandBuffer = (ID3D12GraphicsCommandList7*)deviceInstance.GetAndValidateItem(transferCommandBuffer, D12COMMANDBUFFER7);
-
-    transCommandBuffer->Reset(transCommandPool, NULL);
+    transferCommandRecorder.ResetCommandPoolandBuffer();
 
     bgraPool = deviceInstance.CreateTextureMemoryPool(256 * MiB, D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT);
 
@@ -743,7 +735,7 @@ void DoSceneStuff()
     
     DX12DriverMemoryBuffer* buffer = (DX12DriverMemoryBuffer*)deviceInstance.GetAndValidateItem(deviceLocalBuffer, D12BUFFERMEMORYPOOL);
 
-    deviceInstance.TransitionBufferBarrier(transferCommandBuffer, buffer->bufferHandle, D3D12_BARRIER_SYNC_NONE, D3D12_BARRIER_ACCESS_NO_ACCESS, D3D12_BARRIER_SYNC_COPY, D3D12_BARRIER_ACCESS_COPY_DEST);
+    transferCommandRecorder.TransitionBufferBarrier(buffer->bufferHandle, D3D12_BARRIER_SYNC_NONE, D3D12_BARRIER_ACCESS_NO_ACCESS, D3D12_BARRIER_SYNC_COPY, D3D12_BARRIER_ACCESS_COPY_DEST);
 
     WriteToDeviceLocalMemory(vertexOffset, BoxVerts, sizeof(BoxVerts), 0, 1);
 
@@ -755,7 +747,7 @@ void DoSceneStuff()
 
     WriteToDeviceLocalMemory(world2Data, &world[1], 64, 0, MAX_FRAMES_IN_FLIGHT);
 
-    deviceInstance.TransitionBufferBarrier(transferCommandBuffer, buffer->bufferHandle, D3D12_BARRIER_SYNC_COPY, D3D12_BARRIER_ACCESS_COPY_DEST, D3D12_BARRIER_SYNC_DRAW | D3D12_BARRIER_SYNC_INDEX_INPUT, D3D12_BARRIER_ACCESS_VERTEX_BUFFER | D3D12_BARRIER_ACCESS_CONSTANT_BUFFER | D3D12_BARRIER_ACCESS_INDEX_BUFFER);
+    transferCommandRecorder.TransitionBufferBarrier(buffer->bufferHandle, D3D12_BARRIER_SYNC_COPY, D3D12_BARRIER_ACCESS_COPY_DEST, D3D12_BARRIER_SYNC_DRAW | D3D12_BARRIER_SYNC_INDEX_INPUT, D3D12_BARRIER_ACCESS_VERTEX_BUFFER | D3D12_BARRIER_ACCESS_CONSTANT_BUFFER | D3D12_BARRIER_ACCESS_INDEX_BUFFER);
 
     bgraImageMemoryPool = deviceInstance.CreateSampledImageHandle(bgraPool, details.width, details.height, 1, details.miplevels, details.type, D3D12_RESOURCE_DIMENSION_TEXTURE2D);
 
@@ -776,7 +768,7 @@ void DoSceneStuff()
     int basic1[2] = { camSRVDS, worldOne };
     int basic2[2] = { camSRVDS, worldTwo };
 
-    static XMVECTOR color = { 1.0f, 0.0f, 0.0f, 1.0f };
+    
    
     UploadConstant(camSRVDS, &color, 0);
 
@@ -819,6 +811,8 @@ void DoSceneStuff()
 
 }
 
+
+
 int main()
 {
     cam.view = XMMatrixLookAtRH(XMVectorSet(0.0f, 0.0f, 5.0f, 0.0f), XMVectorSet(0.0f, 0.0f, 0.0f, 0.0f), XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f));
@@ -853,24 +847,22 @@ int main()
         0
     );
 
-    globalRTVDescriptorHeap = deviceInstance.CreateDescriptorHeap(
-        D3D12_DESCRIPTOR_HEAP_TYPE_RTV,
+    globalRTVDescriptorHeap = deviceInstance.CreateDescriptorHeapManager(
         MAX_FRAMES_IN_FLIGHT,
-        D3D12_DESCRIPTOR_HEAP_FLAG_NONE, &globalRTVDescriptorSize
+        D3D12_DESCRIPTOR_HEAP_TYPE_RTV,
+        D3D12_DESCRIPTOR_HEAP_FLAG_NONE
     );
 
  
-    globalDSVDescriptorHeap = deviceInstance.CreateDescriptorHeap(
-        D3D12_DESCRIPTOR_HEAP_TYPE_DSV,
+    globalDSVDescriptorHeap = deviceInstance.CreateDescriptorHeapManager(
         MAX_FRAMES_IN_FLIGHT,
-        D3D12_DESCRIPTOR_HEAP_FLAG_NONE, &globalDSVDescriptorSize
+        D3D12_DESCRIPTOR_HEAP_TYPE_DSV,
+        D3D12_DESCRIPTOR_HEAP_FLAG_NONE
     );
 
     mainSRVDescriptorHeap = deviceInstance.CreateDescriptorHeapManager(MAX_FRAMES_IN_FLIGHT * 100, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE);
 
     mainSamplerDescriptorHeap = deviceInstance.CreateDescriptorHeapManager(MAX_FRAMES_IN_FLIGHT * 100, D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE);
-
-    stagingSRVDescriptorHeap = deviceInstance.CreateDescriptorHeapManager(MAX_FRAMES_IN_FLIGHT * 50, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, D3D12_DESCRIPTOR_HEAP_FLAG_NONE);
 
     stagingSamplerDescriptorHeap = deviceInstance.CreateDescriptorHeapManager(MAX_FRAMES_IN_FLIGHT * 50, D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER, D3D12_DESCRIPTOR_HEAP_FLAG_NONE);
 
@@ -902,17 +894,20 @@ int main()
 
     for (UINT i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
     {
-        graphicCommandBuffers[i] = deviceInstance.CreateCommandList(
+        EntryHandle graphicCommandBuffer = deviceInstance.CreateCommandList(
             graphicCommandPools[i],
             D3D12_COMMAND_LIST_TYPE_DIRECT
         );
+
+        commandRecorders[i] = deviceInstance.CreateRecorder(graphicCommandBuffer, graphicCommandPools[i]);
     }
     
-
-    transferCommandBuffer = deviceInstance.CreateCommandList(
+    EntryHandle transferCommandList = deviceInstance.CreateCommandList(
         transferCommandPool,
         D3D12_COMMAND_LIST_TYPE_DIRECT
     );
+
+    transferCommandRecorder = deviceInstance.CreateRecorder(transferCommandList, transferCommandPool);
 
 
     world[0] = XMMatrixIdentity();
@@ -926,7 +921,7 @@ int main()
     {
         stagingBuffers[i] = deviceInstance.CreateHostBuffer(64*MiB, DXGI_FORMAT_UNKNOWN, D3D12_RESOURCE_FLAG_NONE);
     }
-    
+
     DoSceneStuff();   
     g_IsInitialized = true;
 
@@ -1066,33 +1061,20 @@ EntryHandle CreatePipelineStateObject(EntryHandle rootSignature, ShaderHandles* 
 
 void ResetTransferPool()
 {
-    ID3D12GraphicsCommandList7* transCommandBuffer = (ID3D12GraphicsCommandList7*)deviceInstance.GetAndValidateItem(transferCommandBuffer, D12COMMANDBUFFER7);
-
-    ID3D12CommandAllocator* transCommandPool = (ID3D12CommandAllocator*)deviceInstance.GetAndValidateItem(transferCommandPool, D12COMMANDPOOL);
-
-    transCommandPool->Reset();
-
-    transCommandBuffer->Reset(transCommandPool, NULL);
+    transferCommandRecorder.ResetCommandPoolandBuffer();
 
     transferCommandsUploaded = 0;
 }
 
 int Render()
 {
-
-    auto commandAllocator = graphicCommandPools[currentFrame];
-
-    auto graphicCommandBuffer = graphicCommandBuffers[currentFrame];
+    auto& commandRecorder = commandRecorders[currentFrame];
 
     auto backBuffer = swapChainImages[currentImageIndex];
 
     auto depthBuffer = swapChainDepthImages[currentImageIndex];
 
     auto backBufferResource = (ID3D12Resource*)deviceInstance.GetAndValidateItem(backBuffer, D12RESOURCEHANDLE);
-
-    ID3D12GraphicsCommandList7* gCommandBuffer = (ID3D12GraphicsCommandList7*)deviceInstance.GetAndValidateItem(graphicCommandBuffer, D12COMMANDBUFFER7);
-
-    ID3D12CommandAllocator* commandPool = (ID3D12CommandAllocator*)deviceInstance.GetAndValidateItem(commandAllocator, D12COMMANDPOOL);
 
     ID3D12CommandList* commandLists[2];
 
@@ -1101,39 +1083,40 @@ int Render()
     if (transferCommandsUploaded)
     {
 
-        ID3D12GraphicsCommandList7* transCommandBuffer = (ID3D12GraphicsCommandList7*)deviceInstance.GetAndValidateItem(transferCommandBuffer, D12COMMANDBUFFER7);
+        transferCommandRecorder.CloseCommandBuffer();
 
-        transCommandBuffer->Close();
-
-        commandLists[cmdListIndex++] = transCommandBuffer;
+        commandLists[cmdListIndex++] = transferCommandRecorder.cmdList;
 
         transferCommandsUploaded = 0;
     }
 
-    commandPool->Reset();
-
-    gCommandBuffer->Reset(commandPool, nullptr);
-
-
-    ID3D12DescriptorHeap* dsvDescriptor = (ID3D12DescriptorHeap*)deviceInstance.GetAndValidateItem(globalDSVDescriptorHeap, D12DESCRIPTORHEAP);
-    ID3D12DescriptorHeap* rsvDescriptor = (ID3D12DescriptorHeap*)deviceInstance.GetAndValidateItem(globalRTVDescriptorHeap, D12DESCRIPTORHEAP);
-
-    DX12CPUDescriptorHandle dsvHandle(dsvDescriptor->GetCPUDescriptorHandleForHeapStart(), currentFrame, globalDSVDescriptorSize);
-
-    DX12CPUDescriptorHandle rtvHandle(rsvDescriptor->GetCPUDescriptorHandleForHeapStart(), currentFrame, globalRTVDescriptorSize);
-
-    
+    switch (currentFrame)
     {
-        deviceInstance.TransitionImageResource(gCommandBuffer, backBufferResource,
+    case 0:
+        color = XMVectorSet(0.0, 1.0, 0.0, 1.0);
+        break;
+    case 1:
+        color = XMVectorSet(1.0, 1.0, 0.0, 1.0);
+        break;
+    case 2:
+        color = XMVectorSet(0.0, 0.0, 1.0, 1.0);
+        break;    
+    }
+
+    commandRecorder.ResetCommandPoolandBuffer();
+
+    DX12CPUDescriptorHandle dsvHandle = deviceInstance.GetCPUHandleFromDescriptorManager(globalDSVDescriptorHeap, currentImageIndex);
+
+    DX12CPUDescriptorHandle rtvHandle = deviceInstance.GetCPUHandleFromDescriptorManager(globalRTVDescriptorHeap, currentImageIndex);
+
+    {
+        commandRecorder.TransitionImageResource( backBufferResource,
             D3D12_BARRIER_SYNC_NONE, D3D12_BARRIER_ACCESS_NO_ACCESS,
             D3D12_BARRIER_SYNC_RENDER_TARGET, D3D12_BARRIER_ACCESS_RENDER_TARGET,
             D3D12_BARRIER_LAYOUT_PRESENT, D3D12_BARRIER_LAYOUT_RENDER_TARGET,
             0, 1, 0, 1
         );
     }
-
-    
-
 
     D3D12_VIEWPORT viewport{};
     viewport.Width = 800.0f;
@@ -1175,22 +1158,22 @@ int Render()
     depthDesc.StencilEndingAccess.Type = D3D12_RENDER_PASS_ENDING_ACCESS_TYPE_NO_ACCESS;
 
 
-    gCommandBuffer->BeginRenderPass(1, &rtvDesc, &depthDesc, D3D12_RENDER_PASS_FLAG_NONE);
+    commandRecorder.BeginRenderPass(1, &rtvDesc, &depthDesc, D3D12_RENDER_PASS_FLAG_NONE);
 
 
-    gCommandBuffer->RSSetViewports(1, &viewport);
-    gCommandBuffer->RSSetScissorRects(1, &scissor);
+    commandRecorder.SetScissor(1, &scissor);
+    commandRecorder.SetViewports(1, &viewport);
 
     for (int i = 0; i < 2; i++)
     {
         DX12GraphicsPipelineObject* obj = (DX12GraphicsPipelineObject*)deviceInstance.GetAndValidateItem(storedRenderables[i], D12PIPELINEOBJECT);
-        obj->DrawObject(gCommandBuffer, currentFrame);   
+        obj->DrawObject(&commandRecorders[currentFrame], currentFrame);
     }
 
-    gCommandBuffer->EndRenderPass();
+    commandRecorder.EndRenderPass();
 
     {
-            deviceInstance.TransitionImageResource(gCommandBuffer, backBufferResource,
+        commandRecorder.TransitionImageResource(backBufferResource,
             
                 D3D12_BARRIER_SYNC_RENDER_TARGET, D3D12_BARRIER_ACCESS_RENDER_TARGET,
                 D3D12_BARRIER_SYNC_NONE, D3D12_BARRIER_ACCESS_NO_ACCESS,
@@ -1199,14 +1182,14 @@ int Render()
             );
     }
 
-    if (FAILED(gCommandBuffer->Close()))
+    if (commandRecorder.CloseCommandBuffer())
     {
         printf("Cannot finish recording command buffer\n");
         return -1;
     }
 
 
-    commandLists[cmdListIndex++] = gCommandBuffer;
+    commandLists[cmdListIndex++] = commandRecorder.cmdList;
 
     deviceInstance.ExecuteCommandListsOnQueue(queueHandle, commandLists, cmdListIndex);
 
@@ -1243,7 +1226,7 @@ void WriteToDeviceLocalMemory(int allocationIndex, void* data, size_t size, size
 
     size_t stride = ((alloc->requestedSize * alloc->structureCopies) + alloc->alignment - 1) & ~(alloc->alignment - 1);
 
-    deviceInstance.WriteToDeviceLocalMemory(alloc->memIndex, stagingBuffers[currentFrame], transferCommandBuffer, data, size, alloc->offset + offset, stride, copies);
+    deviceInstance.WriteToDeviceLocalMemory(alloc->memIndex, stagingBuffers[currentFrame], &transferCommandRecorder, data, size, alloc->offset + offset, stride, copies);
 
 	transferCommandsUploaded++;
 }
@@ -1251,7 +1234,7 @@ void WriteToDeviceLocalMemory(int allocationIndex, void* data, size_t size, size
 void WriteToImageDeviceLocalMemory(EntryHandle imageHandle, char* data, UINT width, UINT height, UINT componentCount, UINT totalImageSize, DXGI_FORMAT format, UINT mipLevels, UINT layers)
 {
 
-    deviceInstance.WriteToImageDeviceLocalMemory(imageHandle, transferCommandBuffer, stagingBuffers[currentFrame],
+    deviceInstance.WriteToImageDeviceLocalMemory(imageHandle, &transferCommandRecorder, stagingBuffers[currentFrame],
         data, width, height, componentCount, totalImageSize, format, mipLevels, layers
     );
 
