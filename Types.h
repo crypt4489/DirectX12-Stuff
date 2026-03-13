@@ -200,7 +200,7 @@ enum ShaderStageTypeBits
 
 typedef int ShaderStageType;
 
-struct ShaderSetLayout
+struct ShaderResourceSetTemplate
 {
     int vulkanDescLayout;
     int dx12DescriptorTable;
@@ -221,6 +221,7 @@ struct ShaderResource
     int arrayCount;
     int size;
     int offset;
+    int rangeIndex;
 };
 
 struct ShaderResourceSet
@@ -231,6 +232,8 @@ struct ShaderResourceSet
     int barrierCount;
     int samplerCount;
     int viewCount;
+    int constantsCount;
+    int constantStageCount;
 };
 
 struct ShaderResourceHeader
@@ -257,14 +260,17 @@ struct ShaderResourceImage : public ShaderResourceHeader
 
 struct ShaderResourceBuffer : public ShaderResourceHeader
 {
-    int allocation;
-    int offset;
+    int* allocationIndex;
+    int* offsets;
+    int firstBuffer;
+    int bufferCount;
 };
 
 struct ShaderResourceBufferView : public ShaderResourceHeader
 {
-    int subAllocations;
-    int allocationIndex;
+    int* allocationIndex;
+    int firstView;
+    int viewCount;
 };
 
 
@@ -273,6 +279,7 @@ struct ShaderResourceConstantBuffer : public ShaderResourceHeader
     ShaderStageType stage;
     int size;
     int offset;
+    int rangeindex;
     void* data;
 };
 
@@ -659,13 +666,13 @@ static_assert(sizeof(BitmapInfoHeader) == 40, "no match for bih");
 
 uintptr_t ShaderGraph::GetSet(int setIndex)
 {
-    uintptr_t head = (uintptr_t)(this) + sizeof(ShaderGraph) + (setIndex * sizeof(ShaderSetLayout));
+    uintptr_t head = (uintptr_t)(this) + sizeof(ShaderGraph) + (setIndex * sizeof(ShaderResourceSetTemplate));
     return head;
 }
 
 uintptr_t ShaderGraph::GetResource(int resourceIndex)
 {
-    uintptr_t head = (uintptr_t)(this) + sizeof(ShaderGraph) + (resourceSetCount * sizeof(ShaderSetLayout)) + (shaderMapCount * sizeof(ShaderMap));
+    uintptr_t head = (uintptr_t)(this) + sizeof(ShaderGraph) + (resourceSetCount * sizeof(ShaderResourceSetTemplate)) + (shaderMapCount * sizeof(ShaderMap));
 
     head += (sizeof(ShaderResource) * resourceIndex);
 
@@ -674,14 +681,14 @@ uintptr_t ShaderGraph::GetResource(int resourceIndex)
 
 uintptr_t ShaderGraph::GetMap(int mapIndex)
 {
-    uintptr_t head = (uintptr_t)(this) + sizeof(ShaderGraph) + (resourceSetCount * sizeof(ShaderSetLayout)) + (mapIndex * sizeof(ShaderMap));
+    uintptr_t head = (uintptr_t)(this) + sizeof(ShaderGraph) + (resourceSetCount * sizeof(ShaderResourceSetTemplate)) + (mapIndex * sizeof(ShaderMap));
 
     return head;
 }
 
 int ShaderGraph::GetGraphSize() const
 {
-    int size = sizeof(ShaderGraph) + (resourceSetCount * sizeof(ShaderSetLayout)) + (shaderMapCount * sizeof(ShaderMap)) + (resourceCount * sizeof(ShaderResource));
+    int size = sizeof(ShaderGraph) + (resourceSetCount * sizeof(ShaderResourceSetTemplate)) + (shaderMapCount * sizeof(ShaderMap)) + (resourceCount * sizeof(ShaderResource));
     return size;
 }
 int ShaderMap::GetMapSize() const
@@ -1221,20 +1228,41 @@ constexpr std::array<int, 50> makeArray(int val) {
 
 std::array<int, 50> srvDescriptorTablesStart = makeArray(-1);
 
-
-void BindBufferToShaderResource(int descriptorSet, int allocationIndex, int bindingIndex, int offset)
+/*
+void SetVariableArrayCount(int descriptorSet, int bindingIndex, int varArrayCount)
 {
     uintptr_t head = descriptorSets[descriptorSet];
     ShaderResourceSet* set = (ShaderResourceSet*)head;
-    uintptr_t* offsets = (uintptr_t*)(head + sizeof(ShaderResourceSet));
 
-    ShaderResourceBuffer* header = (ShaderResourceBuffer*)offsets[bindingIndex];
+    uintptr_t* setOffsets = (uintptr_t*)(head + sizeof(ShaderResourceSet));
+
+    ShaderResourceHeader* header = (ShaderResourceHeader*)setOffsets[bindingIndex];
+
+    if (!(header->arrayCount & UNBOUNDED_DESCRIPTOR_ARRAY))
+    {
+        //do something
+    }
+
+    header->arrayCount = (header->arrayCount & UNBOUNDED_DESCRIPTOR_ARRAY) | (varArrayCount & DESCRIPTOR_COUNT_MASK);
+
+}
+*/
+
+void BindBufferToShaderResource(int descriptorSet, int* allocationIndex, int* offsets, int firstBuffer, int bufferCount, int bindingIndex)
+{
+    uintptr_t head = descriptorSets[descriptorSet];
+    ShaderResourceSet* set = (ShaderResourceSet*)head;
+    uintptr_t* setOffsets = (uintptr_t*)(head + sizeof(ShaderResourceSet));
+
+    ShaderResourceBuffer* header = (ShaderResourceBuffer*)setOffsets[bindingIndex];
 
     if (header->type != ShaderResourceType::UNIFORM_BUFFER && header->type != ShaderResourceType::STORAGE_BUFFER)
         return;
 
-    header->allocation = allocationIndex;
-    header->offset = offset;
+    header->allocationIndex = allocationIndex;
+    header->offsets = offsets;
+    header->firstBuffer = firstBuffer;
+    header->bufferCount = bufferCount;
 }
 
 void BindImageResourceToShaderResource(int descriptorSet, EntryHandle* index, int textureCount, int firstTexture, int bindingIndex)
@@ -1285,7 +1313,7 @@ void BindSampledImageToShaderResource(int descriptorSet, EntryHandle* index, int
     header->firstTexture = firstTexture;
 }
 
-void BindSampledImageArrayToShaderResource(int descriptorSet, EntryHandle* indices, uint32_t texCount, int firstTexture, int bindingIndex)
+void BindSampledImageArrayToShaderResource(int descriptorSet, EntryHandle* indices, int texCount, int firstTexture, int bindingIndex)
 {
     uintptr_t head = descriptorSets[descriptorSet];
     ShaderResourceSet* set = (ShaderResourceSet*)head;
@@ -1301,7 +1329,7 @@ void BindSampledImageArrayToShaderResource(int descriptorSet, EntryHandle* indic
     header->firstTexture = firstTexture;
 }
 
-void BindBufferView(int descriptorSet, int allocationIndex, int bindingIndex, int subAllocations)
+void BindBufferView(int descriptorSet, int* allocationIndex, int firstView, int viewCount, int bindingIndex)
 {
     uintptr_t head = descriptorSets[descriptorSet];
     ShaderResourceSet* set = (ShaderResourceSet*)head;
@@ -1313,7 +1341,8 @@ void BindBufferView(int descriptorSet, int allocationIndex, int bindingIndex, in
         return;
 
 
-    header->subAllocations = subAllocations;
+    header->viewCount = viewCount;
+    header->firstView = firstView;
     header->allocationIndex = allocationIndex;
 }
 
@@ -1468,7 +1497,7 @@ int AllocateShaderResourceSet(ShaderGraph* graph, uint32_t targetSet, int setCou
     ptr += sizeof(ShaderResourceSet);
 
 
-    ShaderSetLayout* resourceSet = (ShaderSetLayout*)graph->GetSet(targetSet);
+    ShaderResourceSetTemplate* resourceSet = (ShaderResourceSetTemplate*)graph->GetSet(targetSet);
 
     set->bindingCount = resourceSet->bindingCount;
     set->layoutHandle = resourceSet->vulkanDescLayout;

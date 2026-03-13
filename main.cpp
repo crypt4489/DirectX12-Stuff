@@ -592,49 +592,53 @@ static XMVECTOR BoxVerts[48] =
 
 int AllocFromHostBuffer(size_t size, size_t structureCopies, size_t alignment, ComponentFormatType format, int bufferCopies)
 {
- 
-    size_t allocSize = (size + alignment - 1) & ~((size_t)alignment - 1);
+    size_t perStructSize = (size + alignment - 1) & ~((size_t)alignment - 1);
 
-    allocSize *= structureCopies;
+    size_t totalAllocSize = perStructSize * structureCopies;
 
-    allocSize *= bufferCopies;
+    totalAllocSize *= bufferCopies;
 
-    size_t location = deviceInstance.AllocFromDriverMemoryBuffer(hostBuffer, allocSize, alignment);
+    size_t location = deviceInstance.AllocFromDriverMemoryBuffer(hostBuffer, totalAllocSize, perStructSize);
 
     int index = allocationHandleIndex++;
 
     allocationHandle[index].memIndex = hostBuffer;
     allocationHandle[index].offset = location;
-    allocationHandle[index].deviceAllocSize = allocSize;
+    allocationHandle[index].deviceAllocSize = totalAllocSize;
     allocationHandle[index].requestedSize = size;
     allocationHandle[index].alignment = alignment;
     allocationHandle[index].structureCopies = (int)structureCopies;
     allocationHandle[index].formatType = format;
     allocationHandle[index].allocType = (bufferCopies > 1) ? AllocationType::PERDRAW : AllocationType::STATIC;
+
+    allocationHandle[index].viewIndex = deviceInstance.CreateBufferView(location, perStructSize, (UINT)structureCopies, ConvertComponentFormatToDXGIFormat(format), bufferCopies);
+
+
     return index;
 }
 
 int AllocFromDeviceBuffer(size_t size, size_t structureCopies, size_t alignment, ComponentFormatType format, int bufferCopies)
 {
+    size_t perStructSize = (size + alignment - 1) & ~((size_t)alignment - 1);
 
-    size_t allocSize = (size + alignment - 1) & ~((size_t)alignment - 1);
+    size_t totalAllocSize = perStructSize * structureCopies;
 
-    allocSize *= structureCopies;
+    totalAllocSize *= bufferCopies;
 
-    allocSize *= bufferCopies;
-
-    size_t location = deviceInstance.AllocFromDriverMemoryBuffer(deviceLocalBuffer, allocSize, alignment);
+    size_t location = deviceInstance.AllocFromDriverMemoryBuffer(deviceLocalBuffer, totalAllocSize, perStructSize);
 
     int index = allocationHandleIndex++;
 
     allocationHandle[index].memIndex = deviceLocalBuffer;
     allocationHandle[index].offset = location;
-    allocationHandle[index].deviceAllocSize = allocSize;
+    allocationHandle[index].deviceAllocSize = totalAllocSize;
     allocationHandle[index].requestedSize = size;
     allocationHandle[index].alignment = alignment;
     allocationHandle[index].structureCopies = (int)structureCopies;
     allocationHandle[index].formatType = format;
     allocationHandle[index].allocType = (bufferCopies > 1) ? AllocationType::PERDRAW : AllocationType::STATIC;
+
+    allocationHandle[index].viewIndex = deviceInstance.CreateBufferView(location, perStructSize, (UINT)structureCopies, ConvertComponentFormatToDXGIFormat(format), bufferCopies);
 
     return index;
 }
@@ -753,17 +757,20 @@ void DoSceneStuff()
 
     WriteToImageDeviceLocalMemory(bgraImageMemoryPool, details.data, details.width, details.height, 4, details.dataSize, details.type, details.miplevels, 1);
 
-    int camSRVDS = AllocateShaderResourceSet(mainLayout, 0, MAX_FRAMES_IN_FLIGHT);
 
-    BindBufferToShaderResource(camSRVDS, cameraData, 0, 0);
+    static EntryHandle mainSamplerIndex = deviceInstance.CreateSampler(7);
+
+    static int camSRVDS = AllocateShaderResourceSet(mainLayout, 0, MAX_FRAMES_IN_FLIGHT);
+
+    BindBufferToShaderResource(camSRVDS, &cameraData, nullptr, 0, 1, 0);
     BindImageResourceToShaderResource(camSRVDS, &bgraImageMemoryPool, 1, 0, 1);
-    BindSamplerResourceToShaderResource(camSRVDS, &bgraImageMemoryPool, 1, 0, 2);
+    BindSamplerResourceToShaderResource(camSRVDS, &mainSamplerIndex, 1, 0, 2);
 
-    int worldOne = AllocateShaderResourceSet(mainLayout, 1, MAX_FRAMES_IN_FLIGHT);
-    BindBufferToShaderResource(worldOne, world1Data, 0, 0);
+    static int worldOne = AllocateShaderResourceSet(mainLayout, 1, MAX_FRAMES_IN_FLIGHT);
+    BindBufferToShaderResource(worldOne, &world1Data, nullptr, 0, 1, 0);
     
-    int worldTwo = AllocateShaderResourceSet(mainLayout, 1, MAX_FRAMES_IN_FLIGHT);
-    BindBufferToShaderResource(worldTwo, world2Data, 0, 0);
+    static int worldTwo = AllocateShaderResourceSet(mainLayout, 1, MAX_FRAMES_IN_FLIGHT);
+    BindBufferToShaderResource(worldTwo, &world2Data, nullptr, 0, 1, 0);
 
     int basic1[2] = { camSRVDS, worldOne };
     int basic2[2] = { camSRVDS, worldTwo };
@@ -1349,7 +1356,7 @@ EntryHandle CreateRootSignatureFromShaderGraph(ShaderGraph* graph)
 
     for (int i = 0; i < graph->resourceSetCount; i++)
     {
-        ShaderSetLayout* layout = (ShaderSetLayout*)graph->GetSet(i);
+        ShaderResourceSetTemplate* layout = (ShaderResourceSetTemplate*)graph->GetSet(i);
         samplerCount += layout->samplerCount;
         constantCount += layout->constantsCount;
         numOfRanges += layout->viewCount;
@@ -1477,7 +1484,7 @@ EntryHandle CreateRootSignatureFromShaderGraph(ShaderGraph* graph)
 
     for (int i = 0; i < graph->resourceSetCount; i++)
     {
-        ShaderSetLayout* layout = (ShaderSetLayout*)graph->GetSet(i);
+        ShaderResourceSetTemplate* layout = (ShaderResourceSetTemplate*)graph->GetSet(i);
 
         D3D12_SHADER_VISIBILITY visible = D3D12_SHADER_VISIBILITY_ALL;
 
@@ -1728,13 +1735,10 @@ int CreateTablesFromResourceSet(int* descriptorsets, int numDescriptorSet, int r
                 {
                     for (int h = 0; h < arrayCount; h++)
                     {
-                        DX12ImageHandle* imageHandle = (DX12ImageHandle*)deviceInstance.GetAndValidateItem(image->textureHandles[h], D12IMAGEHANDLE);
-
-                        deviceInstance.CreateImageSRVDescriptorHandle(
-                            imageHandle->resourceIndex,
-                            imageHandle->mipLevels, imageHandle->format, 
-                            mainHeap, mainHeapIndex + (j * bufferCounts) + h, 
-                            D3D12_SRV_DIMENSION_TEXTURE2D
+                        deviceInstance.CreateImageSRVDescriptor(
+                            image->textureHandles[h],
+                            0,
+                            mainHeap, mainHeapIndex + (j * bufferCounts) + h
                         );
                     }
 
@@ -1744,8 +1748,11 @@ int CreateTablesFromResourceSet(int* descriptorsets, int numDescriptorSet, int r
             }
             case ShaderResourceType::SAMPLERSTATE:
             {
-                ShaderResourceSampler* image = (ShaderResourceSampler*)header;
-                deviceInstance.CreateImageSampler(stageSamplerHeap, samplerIndex++);
+                ShaderResourceSampler* samplers = (ShaderResourceSampler*)header;
+                for (int h = 0; h < arrayCount; h++)
+                {
+                    deviceInstance.CreateSamplerDescriptor(samplers->samplerHandles[h], stageSamplerHeap, samplerIndex++);
+                }
                 break;
             }
             case ShaderResourceType::CONSTANT_BUFFER:
@@ -1761,41 +1768,23 @@ int CreateTablesFromResourceSet(int* descriptorsets, int numDescriptorSet, int r
             case ShaderResourceType::STORAGE_BUFFER:
             {
                 ShaderResourceBuffer* buffer = (ShaderResourceBuffer*)header;
-                auto alloc = &allocationHandle[buffer->allocation];
-                size_t stride = (alloc->requestedSize + alloc->alignment - 1) & ~(alloc->alignment - 1);
+               
 
                 for (int j = 0; j < numberOfTables; j++)
                 {
                     for (int h = 0; h < arrayCount; h++)
                     {
+
+                        auto alloc = &allocationHandle[buffer->allocationIndex[h]];
+                        size_t stride = (alloc->requestedSize + alloc->alignment - 1) & ~(alloc->alignment - 1);
+
                         if (buffer->action == ShaderResourceAction::SHADERWRITE || buffer->action == ShaderResourceAction::SHADERWRITE)
                         {
-                            deviceInstance.CreateBufferUAVDescriptorHandle
-                            (
-                                alloc->memIndex,
-                                j * (stride * alloc->structureCopies) + alloc->offset,
-                                alloc->structureCopies,
-                                stride,
-                                0,
-                                ConvertComponentFormatToDXGIFormat(alloc->formatType),
-                                mainHeap,
-                                mainHeapIndex + (j * bufferCounts) + h,
-                                D3D12_BUFFER_UAV_FLAG_NONE
-                            );
+                            deviceInstance.CreateBufferUAVDescriptor(alloc->memIndex, alloc->viewIndex, j, mainHeap, mainHeapIndex + (j * bufferCounts) + h);
                         }
                         else
                         {
-                            deviceInstance.CreateBufferSRVDescriptorHandle
-                            (
-                                alloc->memIndex,
-                                j * (stride * alloc->structureCopies) + alloc->offset,
-                                alloc->structureCopies,
-                                stride,
-                                ConvertComponentFormatToDXGIFormat(alloc->formatType),
-                                mainHeap,
-                                mainHeapIndex + (j * bufferCounts) + h,
-                                D3D12_SRV_DIMENSION_BUFFER
-                            );
+                            deviceInstance.CreateBufferSRVDescriptor(alloc->memIndex, alloc->viewIndex, j, mainHeap, mainHeapIndex + (j * bufferCounts) + h);
                         }
                     }
                 }
@@ -1808,19 +1797,18 @@ int CreateTablesFromResourceSet(int* descriptorsets, int numDescriptorSet, int r
             {
                 ShaderResourceBuffer* buffer = (ShaderResourceBuffer*)header;
 
-                RenderAllocation* alloc = &allocationHandle[buffer->allocation];
-
-                size_t stride = (alloc->requestedSize + alloc->alignment - 1) & ~(alloc->alignment - 1);
-
                 for (int j = 0; j < numberOfTables; j++)
                 {
                     for (int h = 0; h < arrayCount; h++)
                     {
-                        deviceInstance.CreateCBVDescriptorHandle
+
+                        auto alloc = &allocationHandle[buffer->allocationIndex[h]];
+                       
+                        deviceInstance.CreateBufferCBVDescriptor
                         (
                             alloc->memIndex,
-                            j * (stride * alloc->structureCopies) + alloc->offset,
-                            stride,
+                            alloc->viewIndex,
+                            j,
                             mainHeap,
                             mainHeapIndex + (j * bufferCounts) + h
                         );
@@ -1837,47 +1825,24 @@ int CreateTablesFromResourceSet(int* descriptorsets, int numDescriptorSet, int r
             {
                 ShaderResourceBufferView* bufferView = (ShaderResourceBufferView*)header;
 
-                RenderAllocation* alloc = &allocationHandle[bufferView->allocationIndex];
-
-                size_t stride = (alloc->requestedSize + alloc->alignment - 1) & ~(alloc->alignment - 1);
-
                 for (int j = 0; j < numberOfTables; j++)
                 {
-
                     for (int h = 0; h < arrayCount; h++)
                     {
+
+                        RenderAllocation* alloc = &allocationHandle[bufferView->allocationIndex[h]];
+
+                        size_t stride = (alloc->requestedSize + alloc->alignment - 1) & ~(alloc->alignment - 1);
+
                         if (bufferView->action == ShaderResourceAction::SHADERWRITE || bufferView->action == ShaderResourceAction::SHADERWRITE)
                         {
-                            deviceInstance.CreateBufferUAVDescriptorHandle
-                            (
-                                alloc->memIndex,
-                                j * (stride * alloc->structureCopies) + alloc->offset,
-                                alloc->structureCopies,
-                                stride,
-                                0,
-                                ConvertComponentFormatToDXGIFormat(alloc->formatType),
-                                mainHeap,
-                                mainHeapIndex + (j * bufferCounts) + h,
-                                D3D12_BUFFER_UAV_FLAG_NONE
-                            );
+                            deviceInstance.CreateBufferUAVDescriptor(alloc->memIndex, alloc->viewIndex, j, mainHeap, mainHeapIndex + (j * bufferCounts) + h);
                         }
                         else
                         {
-                            deviceInstance.CreateBufferSRVDescriptorHandle
-                            (
-                                alloc->memIndex,
-                                j * (stride * alloc->structureCopies) + alloc->offset,
-                                alloc->structureCopies,
-                                stride,
-                                ConvertComponentFormatToDXGIFormat(alloc->formatType),
-                                mainHeap,
-                                mainHeapIndex + (j * bufferCounts) + h,
-                                D3D12_SRV_DIMENSION_BUFFER
-                            );
+                            deviceInstance.CreateBufferSRVDescriptor(alloc->memIndex, alloc->viewIndex, j, mainHeap, mainHeapIndex + (j * bufferCounts) + h);
                         }
                     }
-
-                
                 }
                 mainHeapIndex += arrayCount;
             }
@@ -2027,9 +1992,9 @@ ShaderGraph* CreateShaderGraph(
 
 
 
-    ShaderGraph* graph = (ShaderGraph*)(AllocFromTemp(sizeof(ShaderGraph) + (setCount * sizeof(ShaderSetLayout)) + (shaderResourceCount * sizeof(ShaderResource)) + (shaderCount * sizeof(ShaderMap)), 4));
+    ShaderGraph* graph = (ShaderGraph*)(AllocFromTemp(sizeof(ShaderGraph) + (setCount * sizeof(ShaderResourceSetTemplate)) + (shaderResourceCount * sizeof(ShaderResource)) + (shaderCount * sizeof(ShaderMap)), 4));
 
-    memset(graph, 0, sizeof(ShaderGraph) + (setCount * sizeof(ShaderSetLayout)) + (shaderResourceCount * sizeof(ShaderResource)));
+    memset(graph, 0, sizeof(ShaderGraph) + (setCount * sizeof(ShaderResourceSetTemplate)) + (shaderResourceCount * sizeof(ShaderResource)));
 
     graph->shaderMapCount = shaderCount;
     graph->resourceSetCount = setCount;
@@ -2064,7 +2029,7 @@ ShaderGraph* CreateShaderGraph(
     for (int i = 0; i < setCount; i++)
     {
 
-        ShaderSetLayout* setLay = (ShaderSetLayout*)graph->GetSet(i);
+        ShaderResourceSetTemplate* setLay = (ShaderResourceSetTemplate*)graph->GetSet(i);
         int resIter = SetNodes[i] + 1;
         ShaderResourceItemXMLTag* tag = (ShaderResourceItemXMLTag*)TreeNodes[resIter];
         int bindingCount = 0;

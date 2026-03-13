@@ -814,6 +814,74 @@ ID3D12Resource* DX12Device::CreateBuffer(ID3D12Device2* device, SIZE_T size, DXG
     return buffer;
 }
 
+EntryHandle DX12Device::CreateBufferView(SIZE_T offset, SIZE_T bufferStrideSize, UINT numStrideCopies, DXGI_FORMAT format, UINT numViewsToCreate)
+{
+  
+	UINT firstElement = (UINT)(offset / bufferStrideSize);
+
+    DX12BufferView* bufferViews = (DX12BufferView*)AllocFromDeviceStorage(sizeof(DX12BufferView) * numViewsToCreate, 4);
+
+	for (UINT i = 0; i < numViewsToCreate; i++)
+	{
+	    bufferViews[i] = {};
+		bufferViews[i].format = format; // structured buffer
+		bufferViews[i].firstOffset = firstElement;
+        bufferViews[i].numStructuredStrides = numStrideCopies;
+		bufferViews[i].structuredStrideSize = (UINT)bufferStrideSize;
+        bufferViews[i].rawBufferOrNot = 0;
+	
+        firstElement += numStrideCopies;
+	}
+
+    EntryHandle drivViewIndex = AllocTypeForEntry(bufferViews, D12BUFFERVIEW);
+
+    return drivViewIndex;
+}
+
+
+EntryHandle DX12Device::CreateSampler(UINT maxMipLevels)
+{
+
+    D3D12_SAMPLER_DESC* samplerDesc = (D3D12_SAMPLER_DESC*)AllocFromDeviceStorage(sizeof(D3D12_SAMPLER_DESC), 4);
+
+    samplerDesc->Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+    samplerDesc->AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+    samplerDesc->AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+    samplerDesc->AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+    samplerDesc->MipLODBias = 0.0f;
+    samplerDesc->MaxAnisotropy = 1;
+    samplerDesc->ComparisonFunc = D3D12_COMPARISON_FUNC_NONE;
+    samplerDesc->BorderColor[0] = 0.0f;
+    samplerDesc->BorderColor[1] = 0.0f;
+    samplerDesc->BorderColor[2] = 0.0f;
+    samplerDesc->BorderColor[3] = 0.0f;
+    samplerDesc->MinLOD = 0.0f;
+    samplerDesc->MaxLOD = (FLOAT)maxMipLevels;
+
+    EntryHandle samplerIndex = AllocTypeForEntry(samplerDesc, D12SAMPLER);
+
+    return samplerIndex;
+}
+
+EntryHandle DX12Device::CreateImageView(DXGI_FORMAT format, UINT planeSlice, UINT mipLevels)
+{
+    DX12ImageViewHandle* viewHandle = (DX12ImageViewHandle*)AllocFromDeviceStorage(sizeof(DX12ImageViewHandle), 4);
+
+   // viewHandle->resourceIndex = imageResource;
+
+    viewHandle->shaderViewDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    viewHandle->shaderViewDesc.Format = format; 
+    viewHandle->shaderViewDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    viewHandle->shaderViewDesc.Texture2D.MipLevels = mipLevels;
+    viewHandle->shaderViewDesc.Texture2D.PlaneSlice = planeSlice;
+    viewHandle->shaderViewDesc.Texture2D.MostDetailedMip = 0;
+    viewHandle->shaderViewDesc.Texture2D.ResourceMinLODClamp = 0;
+
+    EntryHandle viewHandleIndex = AllocTypeForEntry(viewHandle, D12IMAGEVIEW);
+
+    return viewHandleIndex;
+}
+
 SIZE_T DX12Device::AllocFromDriverMemoryBuffer(EntryHandle bufferPoolIndex, SIZE_T allocSize, SIZE_T alignment)
 {
     DX12DriverMemoryBuffer* dmb = (DX12DriverMemoryBuffer*)GetAndValidateItem(bufferPoolIndex, D12BUFFERMEMORYPOOL);
@@ -1147,6 +1215,8 @@ EntryHandle DX12Device::CreateSampledImageHandle(EntryHandle poolIdx, UINT width
     handle->format = format;
     handle->resourceIndex = CreateImageResourceFromPool(poolIdx, width, height, depth, mips, D3D12_RESOURCE_FLAG_NONE, format, dimension);
 
+    handle->views[0] = CreateImageView(format, 0, mips);
+
     return AllocTypeForEntry(handle, D12IMAGEHANDLE);
 }
 
@@ -1188,102 +1258,69 @@ EntryHandle DX12Device::CreateRootSignature(DX12RootSignatureCreate* createInfo,
 }
 
 
-void DX12Device::CreateImageSampler(DX12DescriptorHeapManager* samplerDescriptorHeap, UINT heapIndex)
+void DX12Device::CreateSamplerDescriptor(EntryHandle samplerIndex, DX12DescriptorHeapManager* samplerDescriptorHeap, UINT heapIndex)
 {
     ID3D12DescriptorHeap* sampDescriptor = (ID3D12DescriptorHeap*)GetAndValidateItem(samplerDescriptorHeap->descriptorHeap, D12DESCRIPTORHEAP);
 
     DX12CPUDescriptorHandle samplerHandle(sampDescriptor->GetCPUDescriptorHandleForHeapStart(), heapIndex, samplerDescriptorHeap->descriptorHeapHandleSize);
 
-    D3D12_SAMPLER_DESC samplerDesc = {};
-    samplerDesc.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
-    samplerDesc.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-    samplerDesc.AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-    samplerDesc.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-    samplerDesc.MipLODBias = 0.0f;
-    samplerDesc.MaxAnisotropy = 1;
-    samplerDesc.ComparisonFunc = D3D12_COMPARISON_FUNC_NONE;
-    samplerDesc.BorderColor[0] = 0.0f;
-    samplerDesc.BorderColor[1] = 0.0f;
-    samplerDesc.BorderColor[2] = 0.0f;
-    samplerDesc.BorderColor[3] = 0.0f;
-    samplerDesc.MinLOD = 0.0f;
-    samplerDesc.MaxLOD = D3D12_FLOAT32_MAX;
+    D3D12_SAMPLER_DESC* samplerDesc = (D3D12_SAMPLER_DESC*)GetAndValidateItem(samplerIndex, D12SAMPLER);
 
-    deviceHandle->CreateSampler(&samplerDesc, samplerHandle);
+    deviceHandle->CreateSampler(samplerDesc, samplerHandle);
 }
 
-
-void DX12Device::CreateImageSRVDescriptorHandle(EntryHandle bufferPoolHandle, UINT mipsLevels, DXGI_FORMAT format, DX12DescriptorHeapManager* heap, UINT heapIndex, D3D12_SRV_DIMENSION dimension)
+void DX12Device::CreateBufferSRVDescriptor(EntryHandle bufferPoolHandle, EntryHandle viewIndex, UINT subViewIndex, DX12DescriptorHeapManager* heap, UINT heapIndex)
 {
-    ID3D12DescriptorHeap* srvDescriptor = (ID3D12DescriptorHeap*)GetAndValidateItem(heap->descriptorHeap, D12DESCRIPTORHEAP);
-
-    ID3D12Resource* bufferHandle = (ID3D12Resource*)GetAndValidateItem(bufferPoolHandle, D12RESOURCEHANDLE);
-
-    DX12CPUDescriptorHandle srvHandle(srvDescriptor->GetCPUDescriptorHandleForHeapStart(), heapIndex, heap->descriptorHeapHandleSize);
-
-    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
-    srvDesc.ViewDimension = dimension;
-    srvDesc.Format = format; // structured buffer
-    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-    srvDesc.Texture2D.MipLevels = 1;
-
-    deviceHandle->CreateShaderResourceView(bufferHandle, &srvDesc, srvHandle);
-
-
-}
-
-void DX12Device::CreateBufferSRVDescriptorHandle(EntryHandle bufferPoolHandle, SIZE_T  offset, UINT numCount, SIZE_T size, DXGI_FORMAT format, DX12DescriptorHeapManager* heap, UINT heapIndex, D3D12_SRV_DIMENSION dimension)
-{
-
-    UINT firstElement = (UINT)(offset / size);
-
+  
     ID3D12Resource* bufferHandle = GetResourceHandleForMemoryBuffer(bufferPoolHandle);
 
     ID3D12DescriptorHeap* srvDescriptor = (ID3D12DescriptorHeap*)GetAndValidateItem(heap->descriptorHeap, D12DESCRIPTORHEAP);
 
     DX12CPUDescriptorHandle srvHandle(srvDescriptor->GetCPUDescriptorHandleForHeapStart(), heapIndex, heap->descriptorHeapHandleSize);
 
+    DX12BufferView* views = (DX12BufferView*)GetAndValidateItem(viewIndex, D12BUFFERVIEW);
+
+    DX12BufferView& specView = views[subViewIndex];
+
     D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
-    srvDesc.ViewDimension = dimension;
-    srvDesc.Format = format; // structured buffer
-    srvDesc.Buffer.FirstElement = firstElement;
-    srvDesc.Buffer.NumElements = numCount;
-    srvDesc.Buffer.StructureByteStride = (UINT)size;
-    srvDesc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
+    srvDesc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+    srvDesc.Format = specView.format; // structured buffer
+    srvDesc.Buffer.FirstElement = specView.firstOffset;
+    srvDesc.Buffer.NumElements = specView.numStructuredStrides;
+    srvDesc.Buffer.StructureByteStride = specView.structuredStrideSize;
+    srvDesc.Buffer.Flags = (specView.rawBufferOrNot ? D3D12_BUFFER_SRV_FLAG_RAW : D3D12_BUFFER_SRV_FLAG_NONE);
     srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
 
     deviceHandle->CreateShaderResourceView(bufferHandle, &srvDesc, srvHandle);
-
 }
 
-void DX12Device::CreateBufferUAVDescriptorHandle(EntryHandle bufferPoolHandle, SIZE_T offset, UINT numCount, SIZE_T size, SIZE_T counterOffsetInBytes, DXGI_FORMAT format, DX12DescriptorHeapManager* heap, UINT heapIndex, D3D12_BUFFER_UAV_FLAGS uavFlags)
+void DX12Device::CreateBufferUAVDescriptor(EntryHandle bufferPoolHandle, EntryHandle viewIndex, UINT subViewIndex, DX12DescriptorHeapManager* heap, UINT heapIndex)
 {
-
-    UINT firstElement = (UINT)(offset / size);
-
     ID3D12Resource* bufferHandle = GetResourceHandleForMemoryBuffer(bufferPoolHandle);
 
     ID3D12DescriptorHeap* uavDescriptor = (ID3D12DescriptorHeap*)GetAndValidateItem(heap->descriptorHeap, D12DESCRIPTORHEAP);
 
     DX12CPUDescriptorHandle uavHandle(uavDescriptor->GetCPUDescriptorHandleForHeapStart(), heapIndex, heap->descriptorHeapHandleSize);
 
+    DX12BufferView* views = (DX12BufferView*)GetAndValidateItem(viewIndex, D12BUFFERVIEW);
+
+    DX12BufferView& specView = views[subViewIndex];
 
     D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
 
     uavDesc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
-    uavDesc.Format = format; // structured buffer
-    uavDesc.Buffer.FirstElement = firstElement;
-    uavDesc.Buffer.NumElements = numCount;
-    uavDesc.Buffer.StructureByteStride = (UINT)size;
-    uavDesc.Buffer.Flags = uavFlags;
-    uavDesc.Buffer.CounterOffsetInBytes = counterOffsetInBytes ;
+    uavDesc.Format = specView.format; // structured buffer
+    uavDesc.Buffer.FirstElement = specView.firstOffset;
+    uavDesc.Buffer.NumElements = specView.numStructuredStrides;
+    uavDesc.Buffer.StructureByteStride = specView.structuredStrideSize;
+    uavDesc.Buffer.Flags = (specView.rawBufferOrNot ? D3D12_BUFFER_UAV_FLAG_RAW : D3D12_BUFFER_UAV_FLAG_NONE);
+    uavDesc.Buffer.CounterOffsetInBytes = 0;
 
 
     deviceHandle->CreateUnorderedAccessView(bufferHandle, nullptr, &uavDesc, uavHandle);
-
 }
 
-void DX12Device::CreateCBVDescriptorHandle(EntryHandle bufferPoolHandle, SIZE_T offset, SIZE_T size, DX12DescriptorHeapManager* heap, UINT heapIndex)
+void DX12Device::CreateBufferCBVDescriptor(EntryHandle bufferPoolHandle, EntryHandle viewIndex, UINT subViewIndex, DX12DescriptorHeapManager* heap, UINT heapIndex)
 {
     ID3D12DescriptorHeap* cbvDescriptor = (ID3D12DescriptorHeap*)GetAndValidateItem(heap->descriptorHeap, D12DESCRIPTORHEAP);
 
@@ -1291,12 +1328,35 @@ void DX12Device::CreateCBVDescriptorHandle(EntryHandle bufferPoolHandle, SIZE_T 
 
     ID3D12Resource* bufferHandle = GetResourceHandleForMemoryBuffer(bufferPoolHandle);
 
+    DX12BufferView* views = (DX12BufferView*)GetAndValidateItem(viewIndex, D12BUFFERVIEW);
+
+    DX12BufferView& specView = views[subViewIndex];
+
+    UINT64 offset = (specView.firstOffset * specView.structuredStrideSize);
+
+    UINT size = (specView.numStructuredStrides * specView.structuredStrideSize);
+
     D3D12_CONSTANT_BUFFER_VIEW_DESC cbvDesc = {};
 
     cbvDesc.BufferLocation = bufferHandle->GetGPUVirtualAddress() + offset;
     cbvDesc.SizeInBytes = ((UINT)size + (255)) & ~255;
 
     deviceHandle->CreateConstantBufferView(&cbvDesc, cbvHandle);
+}
+
+void DX12Device::CreateImageSRVDescriptor(EntryHandle imageHandle, UINT viewIndex, DX12DescriptorHeapManager* heap, UINT heapIndex)
+{
+    ID3D12DescriptorHeap* srvDescriptor = (ID3D12DescriptorHeap*)GetAndValidateItem(heap->descriptorHeap, D12DESCRIPTORHEAP);
+
+    DX12ImageHandle* imageHandleDriv = (DX12ImageHandle*)GetAndValidateItem(imageHandle, D12IMAGEHANDLE);
+
+    ID3D12Resource* imageResourceHandle = (ID3D12Resource*)GetAndValidateItem(imageHandleDriv->resourceIndex, D12RESOURCEHANDLE);
+
+    D3D12_SHADER_RESOURCE_VIEW_DESC* desc = (D3D12_SHADER_RESOURCE_VIEW_DESC*)GetAndValidateItem(imageHandleDriv->views[viewIndex], D12IMAGEVIEW);
+
+    DX12CPUDescriptorHandle srvHandle(srvDescriptor->GetCPUDescriptorHandleForHeapStart(), heapIndex, heap->descriptorHeapHandleSize);
+
+    deviceHandle->CreateShaderResourceView(imageResourceHandle, desc, srvHandle);
 }
 
 EntryHandle DX12Device::CreateDescriptorHeapManager(UINT maxDescriptorHandles, D3D12_DESCRIPTOR_HEAP_TYPE type, D3D12_DESCRIPTOR_HEAP_FLAGS flags)

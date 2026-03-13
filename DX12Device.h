@@ -32,6 +32,9 @@ enum DX12ComType
     D12COMMANDBUFFEROBJECT = 16,
     D12SWAPCHAININSTANCE = 17,
     D12IMAGEHANDLE = 18,
+    D12IMAGEVIEW = 19,
+    D12SAMPLER = 20,
+    D12BUFFERVIEW = 21
 };
 
 struct DX12PoolItem
@@ -104,6 +107,23 @@ struct DX12ImageHandle
     UINT mipLevels;
     UINT arrayCount;
     DXGI_FORMAT format;
+    EntryHandle views[4];
+};
+
+struct DX12ImageViewHandle
+{
+    D3D12_SHADER_RESOURCE_VIEW_DESC shaderViewDesc;
+};
+
+
+struct DX12BufferView
+{
+    SIZE_T firstOffset;
+    UINT structuredStrideSize;
+    UINT numStructuredStrides;
+    DXGI_FORMAT format;
+    UINT rawBufferOrNot;
+    UINT pad1;
 };
 
 struct DX12SamplerHandle
@@ -504,6 +524,8 @@ struct DX12Device
 
     ID3D12Resource* CreateBuffer(ID3D12Device2* device, SIZE_T size, DXGI_FORMAT format, D3D12_RESOURCE_FLAGS flags, D3D12_HEAP_TYPE heapType);
 
+    EntryHandle CreateBufferView(SIZE_T offset, SIZE_T bufferStrideSize, UINT numStrideCopies, DXGI_FORMAT format, UINT numViewsToCreate);
+
     ID3D12CommandAllocator* CreateCommandAllocator(ID3D12Device2* device, D3D12_COMMAND_LIST_TYPE type);
     EntryHandle CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE type);
 
@@ -518,8 +540,6 @@ struct DX12Device
     EntryHandle CreateCommandQueue(D3D12_COMMAND_LIST_TYPE type);
 
     EntryHandle CreateCommittedImageResource(UINT width, UINT height, UINT depth, UINT mips, D3D12_RESOURCE_FLAGS flags, DXGI_FORMAT format, D3D12_RESOURCE_DIMENSION dimension);
-
-    void CreateCBVDescriptorHandle(EntryHandle bufferPoolHandle, SIZE_T offset, SIZE_T size, DX12DescriptorHeapManager* heap, UINT heapIndex);
 
     EntryHandle CreateDSVRSVMemoryPool(SIZE_T sizeOfPool, SIZE_T alignment, bool msaa);
 
@@ -539,9 +559,7 @@ struct DX12Device
 
     ID3D12Heap* CreateDX12Heap(SIZE_T size, SIZE_T alignment, D3D12_HEAP_FLAGS heapFlags, D3D12_HEAP_TYPE heapType);
 
-    void CreateImageSampler(DX12DescriptorHeapManager* samplerDescriptorHeap, UINT heapIndex);
-
-    void CreateImageSRVDescriptorHandle(EntryHandle bufferPoolHandle, UINT mipsLevels, DXGI_FORMAT format, DX12DescriptorHeapManager* heap, UINT heapIndex, D3D12_SRV_DIMENSION dimension);
+    void CreateImageSRVDescriptor(EntryHandle imageHandle, UINT viewIndex, DX12DescriptorHeapManager* heap, UINT heapIndex);
 
     EntryHandle CreateImageMemoryPool(SIZE_T sizeOfPool, SIZE_T alignment, D3D12_HEAP_FLAGS heapFlags, D3D12_HEAP_TYPE heapType);
 
@@ -557,8 +575,6 @@ struct DX12Device
 
     EntryHandle CreateRootSignature(DX12RootSignatureCreate* createInfo, D3D12_ROOT_SIGNATURE_FLAGS flags);
 
-    void CreateBufferSRVDescriptorHandle(EntryHandle bufferPoolHandle, SIZE_T  offset, UINT numCount, SIZE_T size, DXGI_FORMAT format, DX12DescriptorHeapManager* heap, UINT heapIndex, D3D12_SRV_DIMENSION dimension);
-
     EntryHandle CreateShaderBlob(const char* shaderfile);
 
     IDXGISwapChain4* CreateSwapChain(HWND hWnd, ID3D12CommandQueue* commandQueue, int width, int height, int bufferCount, DXGI_FORMAT format, UINT debug);
@@ -566,12 +582,21 @@ struct DX12Device
 
     EntryHandle CreateTextureMemoryPool(SIZE_T sizeOfPool, SIZE_T alignment);
 
-    void CreateBufferUAVDescriptorHandle(EntryHandle bufferPoolHandle, SIZE_T  offset, UINT numCount, SIZE_T size,SIZE_T  counterOffsetInBytes, DXGI_FORMAT format, DX12DescriptorHeapManager* heap, UINT heapIndex, D3D12_BUFFER_UAV_FLAGS uavFlags);
-
     EntryHandle CreateDeviceBuffer(UINT size, DXGI_FORMAT format, D3D12_RESOURCE_FLAGS flags);
 
     EntryHandle CreateHostBuffer(UINT size, DXGI_FORMAT format, D3D12_RESOURCE_FLAGS flags);
 
+    EntryHandle CreateSampler(UINT maxMipLevles);
+
+    EntryHandle CreateImageView(DXGI_FORMAT format, UINT planeSlice, UINT mipLevels);
+
+    void CreateSamplerDescriptor(EntryHandle samplerIndex, DX12DescriptorHeapManager* samplerDescriptorHeap, UINT heapIndex);
+
+    void CreateBufferSRVDescriptor(EntryHandle bufferPoolHandle, EntryHandle viewIndex, UINT subViewIndex, DX12DescriptorHeapManager* heap, UINT heapIndex);
+
+    void CreateBufferUAVDescriptor(EntryHandle bufferPoolHandle, EntryHandle viewIndex, UINT subViewIndex, DX12DescriptorHeapManager* heap, UINT heapIndex);
+
+    void CreateBufferCBVDescriptor(EntryHandle bufferPoolHandle, EntryHandle viewIndex, UINT subViewIndex, DX12DescriptorHeapManager* heap, UINT heapIndex);
 
     void CopyDescriptors(UINT numDescriptors, UINT startInSrc, UINT startInDst, EntryHandle srcHeap, EntryHandle destHeap, UINT srcHeapSize, UINT dstHeapSize, D3D12_DESCRIPTOR_HEAP_TYPE type);
 
