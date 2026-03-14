@@ -1359,6 +1359,180 @@ void DX12Device::CreateImageSRVDescriptor(EntryHandle imageHandle, UINT viewInde
     deviceHandle->CreateShaderResourceView(imageResourceHandle, desc, srvHandle);
 }
 
+EntryHandle DX12Device::CreateSwapChainHandle(HWND hWnd, EntryHandle commandQueue, UINT numberOfImages, UINT width, UINT height, DXGI_FORMAT format)
+{
+    DX12SwapChain* dx12swc = (DX12SwapChain*)AllocFromDeviceStorage(sizeof(DX12SwapChain), 4);
+
+    ID3D12CommandQueue* queue = (ID3D12CommandQueue*)GetAndValidateItem(commandQueue, D12QUEUE);
+
+    IDXGISwapChain4* swcChain = CreateSwapChain(hWnd, queue, width, height, numberOfImages, format, 0);
+
+    EntryHandle swcChainIndex = AllocTypeForEntry(swcChain, DXGISWAPCHAIN);
+
+    dx12swc->height = height;
+    dx12swc->width = width;
+    dx12swc->rtvFormat = format;
+    dx12swc->numberOfImages = numberOfImages;
+    dx12swc->dxgiSwapChainHandle = swcChainIndex;
+
+    dx12swc->rtvDescriptorHeap = CreateDescriptorHeapManager(
+        numberOfImages,
+        D3D12_DESCRIPTOR_HEAP_TYPE_RTV,
+        D3D12_DESCRIPTOR_HEAP_FLAG_NONE
+    );
+
+    dx12swc->backBufferResources = (EntryHandle*)AllocFromDeviceStorage(sizeof(EntryHandle) * numberOfImages, alignof(EntryHandle));
+
+    CreateRenderTargetView(swcChainIndex, dx12swc->rtvDescriptorHeap, dx12swc->backBufferResources, numberOfImages);
+
+    return AllocTypeForEntry(dx12swc, D12SWAPCHAINHANDLE);
+}
+
+void DX12Device::TransitionSWCImageToRenderTarget(EntryHandle swcIndex, UINT currentImage, DX12GraphicsCommandRecorder* recorder)
+{
+    DX12SwapChain* dx12swc = (DX12SwapChain*)GetAndValidateItem(swcIndex, D12SWAPCHAINHANDLE);
+
+    ID3D12Resource* backBuffer = (ID3D12Resource*)GetAndValidateItem(dx12swc->backBufferResources[currentImage], D12RESOURCEHANDLE);
+
+    recorder->TransitionImageResource(backBuffer,
+        D3D12_BARRIER_SYNC_NONE, D3D12_BARRIER_ACCESS_NO_ACCESS,
+        D3D12_BARRIER_SYNC_RENDER_TARGET, D3D12_BARRIER_ACCESS_RENDER_TARGET,
+        D3D12_BARRIER_LAYOUT_PRESENT, D3D12_BARRIER_LAYOUT_RENDER_TARGET,
+        0, 1, 0, 1
+    );
+}
+
+void DX12Device::BeginRenderPassForSWC(EntryHandle swcIndex, UINT currentImage, FLOAT clearColor[4], D3D12_RENDER_PASS_DEPTH_STENCIL_DESC* depthDesc, DX12GraphicsCommandRecorder* recorder,  D3D12_RENDER_PASS_BEGINNING_ACCESS_TYPE beginningAccess, D3D12_RENDER_PASS_ENDING_ACCESS_TYPE endingAccess)
+{
+    DX12SwapChain* dx12swc = (DX12SwapChain*)GetAndValidateItem(swcIndex, D12SWAPCHAINHANDLE);    
+
+    D3D12_VIEWPORT viewport{};
+    viewport.Width = (FLOAT)dx12swc->width;
+    viewport.Height = (FLOAT)dx12swc->height;
+    viewport.MinDepth = 0.0f;
+    viewport.MaxDepth = 1.0f;
+
+    D3D12_RECT scissor{};
+    scissor.left = 0;
+    scissor.top = 0;
+    scissor.right = dx12swc->width;
+    scissor.bottom = dx12swc->height;
+
+    UINT rtvCount = 1;
+    D3D12_RENDER_PASS_RENDER_TARGET_DESC rtvDesc{};
+
+    rtvDesc.BeginningAccess.Type = beginningAccess;
+
+    if (beginningAccess == D3D12_RENDER_PASS_BEGINNING_ACCESS_TYPE_CLEAR)
+    {
+        rtvDesc.BeginningAccess.Clear.ClearValue.Format = dx12swc->rtvFormat;
+        memcpy(rtvDesc.BeginningAccess.Clear.ClearValue.Color, clearColor, sizeof(FLOAT) * 4);
+    }
+
+    rtvDesc.EndingAccess.Type = endingAccess;
+
+    if (endingAccess == D3D12_RENDER_PASS_ENDING_ACCESS_TYPE_RESOLVE)
+    {
+       
+    }
+   
+    DX12CPUDescriptorHandle rtvHandle = GetCPUHandleFromDescriptorManager(dx12swc->rtvDescriptorHeap, currentImage);
+    rtvDesc.cpuDescriptor = rtvHandle;
+    
+
+    recorder->BeginRenderPass(rtvCount, &rtvDesc, depthDesc, D3D12_RENDER_PASS_FLAG_NONE);
+
+    recorder->SetScissor(1, &scissor);
+    recorder->SetViewports(1, &viewport);
+}
+
+void DX12Device::BeginRenderPassForSWCMSAA(EntryHandle swcIndex, UINT currentImage, FLOAT clearColor[4], D3D12_RENDER_PASS_DEPTH_STENCIL_DESC* depthDesc, DX12GraphicsCommandRecorder* recorder, D3D12_RENDER_PASS_BEGINNING_ACCESS_TYPE beginningAccess)
+{
+    DX12SwapChain* dx12swc = (DX12SwapChain*)GetAndValidateItem(swcIndex, D12SWAPCHAINHANDLE);
+
+    D3D12_VIEWPORT viewport{};
+    viewport.Width = (FLOAT)dx12swc->width;
+    viewport.Height = (FLOAT)dx12swc->height;
+    viewport.MinDepth = 0.0f;
+    viewport.MaxDepth = 1.0f;
+
+    D3D12_RECT scissor{};
+    scissor.left = 0;
+    scissor.top = 0;
+    scissor.right = dx12swc->width;
+    scissor.bottom = dx12swc->height;
+
+    UINT rtvCount = 1;
+    D3D12_RENDER_PASS_RENDER_TARGET_DESC rtvDesc{};
+
+    rtvDesc.BeginningAccess.Type = beginningAccess;
+
+    if (beginningAccess == D3D12_RENDER_PASS_BEGINNING_ACCESS_TYPE_CLEAR)
+    {
+        rtvDesc.BeginningAccess.Clear.ClearValue.Format = dx12swc->rtvFormat;
+        memcpy(rtvDesc.BeginningAccess.Clear.ClearValue.Color, clearColor, sizeof(FLOAT) * 4);
+    }
+
+    rtvDesc.EndingAccess.Type = D3D12_RENDER_PASS_ENDING_ACCESS_TYPE_RESOLVE;
+
+   
+        
+     ID3D12Resource* backBuffer = (ID3D12Resource*)GetAndValidateItem(dx12swc->backBufferResources[currentImage], D12RESOURCEHANDLE);
+     rtvDesc.EndingAccess.Resolve.pDstResource = backBuffer;
+     rtvDesc.EndingAccess.Resolve.Format = dx12swc->rtvFormat;
+     rtvDesc.EndingAccess.Resolve.ResolveMode = D3D12_RESOLVE_MODE_AVERAGE;
+     rtvDesc.EndingAccess.Resolve.SubresourceCount = 1;
+        //rtvDesc.cpuDescriptor = *msaaTarget;
+       
+ 
+
+
+    recorder->BeginRenderPass(rtvCount, &rtvDesc, depthDesc, D3D12_RENDER_PASS_FLAG_NONE);
+
+    recorder->SetScissor(1, &scissor);
+    recorder->SetViewports(1, &viewport);
+}
+
+void DX12Device::TransitionSWCToPresent(EntryHandle swcIndex, UINT currentImageIndex, DX12GraphicsCommandRecorder* recorder)
+{
+
+    DX12SwapChain* dx12swc = (DX12SwapChain*)GetAndValidateItem(swcIndex, D12SWAPCHAINHANDLE);
+
+    ID3D12Resource* backBuffer = (ID3D12Resource*)GetAndValidateItem(dx12swc->backBufferResources[currentImageIndex], D12RESOURCEHANDLE);
+
+    recorder->TransitionImageResource(backBuffer,
+
+        D3D12_BARRIER_SYNC_RENDER_TARGET, D3D12_BARRIER_ACCESS_RENDER_TARGET,
+        D3D12_BARRIER_SYNC_NONE, D3D12_BARRIER_ACCESS_NO_ACCESS,
+        D3D12_BARRIER_LAYOUT_RENDER_TARGET, D3D12_BARRIER_LAYOUT_PRESENT,
+        0, 1, 0, 1
+    );
+}
+
+int DX12Device::PresentSwapChainImage(EntryHandle swcIndex, UINT syncIntervalFlag, UINT presentFlags)
+{
+    DX12SwapChain* dx12swc = (DX12SwapChain*)GetAndValidateItem(swcIndex, D12SWAPCHAINHANDLE);
+
+    IDXGISwapChain4* lSwapChain = (IDXGISwapChain4*)GetAndValidateItem(dx12swc->dxgiSwapChainHandle, DXGISWAPCHAIN);
+
+    if (FAILED(lSwapChain->Present(syncIntervalFlag, presentFlags)))
+    {
+        printf("Cannot present image\n");
+        return -1;
+    }
+
+    return 0;
+}
+
+UINT DX12Device::AcquireNextImageFromSWC(EntryHandle swcIndex)
+{
+    DX12SwapChain* dx12swc = (DX12SwapChain*)GetAndValidateItem(swcIndex, D12SWAPCHAINHANDLE);
+
+    IDXGISwapChain4* lSwapChain = (IDXGISwapChain4*)GetAndValidateItem(dx12swc->dxgiSwapChainHandle, DXGISWAPCHAIN);
+
+    return lSwapChain->GetCurrentBackBufferIndex();
+}
+
 EntryHandle DX12Device::CreateDescriptorHeapManager(UINT maxDescriptorHandles, D3D12_DESCRIPTOR_HEAP_TYPE type, D3D12_DESCRIPTOR_HEAP_FLAGS flags)
 {
     DX12DescriptorHeapManager* manager = (DX12DescriptorHeapManager*)AllocFromDeviceStorage(sizeof(DX12DescriptorHeapManager), 4);

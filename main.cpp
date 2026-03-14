@@ -439,7 +439,6 @@ EntryHandle queueHandle;
 
 EntryHandle swapChain;
 
-EntryHandle swapChainImages[MAX_FRAMES_IN_FLIGHT];
 
 EntryHandle swapChainDepthImages[MAX_FRAMES_IN_FLIGHT];
 
@@ -450,7 +449,6 @@ DX12GraphicsCommandRecorder transferCommandRecorder;
 
 int transferCommandsUploaded = 0;
 
-EntryHandle globalRTVDescriptorHeap;
 EntryHandle globalDSVDescriptorHeap;
 
 UINT currentFrame = 0;
@@ -844,20 +842,13 @@ int main()
   
     queueHandle = deviceInstance.CreateCommandQueue(D3D12_COMMAND_LIST_TYPE_DIRECT);
 
-    swapChain = deviceInstance.CreateSwapChain(
+    swapChain = deviceInstance.CreateSwapChainHandle(
         hwnd,
         queueHandle,
+        MAX_FRAMES_IN_FLIGHT,
         800,
         600,
-        MAX_FRAMES_IN_FLIGHT,
-        ConvertImageFormatToDXGIFormat(ImageFormat::R8G8B8A8),
-        0
-    );
-
-    globalRTVDescriptorHeap = deviceInstance.CreateDescriptorHeapManager(
-        MAX_FRAMES_IN_FLIGHT,
-        D3D12_DESCRIPTOR_HEAP_TYPE_RTV,
-        D3D12_DESCRIPTOR_HEAP_FLAG_NONE
+        ConvertImageFormatToDXGIFormat(ImageFormat::R8G8B8A8)
     );
 
  
@@ -872,8 +863,6 @@ int main()
     mainSamplerDescriptorHeap = deviceInstance.CreateDescriptorHeapManager(MAX_FRAMES_IN_FLIGHT * 100, D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE);
 
     stagingSamplerDescriptorHeap = deviceInstance.CreateDescriptorHeapManager(MAX_FRAMES_IN_FLIGHT * 50, D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER, D3D12_DESCRIPTOR_HEAP_FLAG_NONE);
-
-    deviceInstance.CreateRenderTargetView(swapChain, globalRTVDescriptorHeap, swapChainImages, MAX_FRAMES_IN_FLIGHT);
 
     rsvdsvPool = deviceInstance.CreateDSVRSVMemoryPool(24 * MiB, (1<<22), false);
 
@@ -1075,13 +1064,13 @@ void ResetTransferPool()
 
 int Render()
 {
+    deviceInstance.WaitForFenceValue(globalRendererFence, g_FrameFenceValues[currentFrame], UINT32_MAX);
+
+    currentImageIndex = deviceInstance.AcquireNextImageFromSWC(swapChain);
+
     auto& commandRecorder = commandRecorders[currentFrame];
 
-    auto backBuffer = swapChainImages[currentImageIndex];
-
     auto depthBuffer = swapChainDepthImages[currentImageIndex];
-
-    auto backBufferResource = (ID3D12Resource*)deviceInstance.GetAndValidateItem(backBuffer, D12RESOURCEHANDLE);
 
     ID3D12CommandList* commandLists[2];
 
@@ -1114,47 +1103,9 @@ int Render()
 
     DX12CPUDescriptorHandle dsvHandle = deviceInstance.GetCPUHandleFromDescriptorManager(globalDSVDescriptorHeap, currentImageIndex);
 
-    DX12CPUDescriptorHandle rtvHandle = deviceInstance.GetCPUHandleFromDescriptorManager(globalRTVDescriptorHeap, currentImageIndex);
-
-    {
-        commandRecorder.TransitionImageResource( backBufferResource,
-            D3D12_BARRIER_SYNC_NONE, D3D12_BARRIER_ACCESS_NO_ACCESS,
-            D3D12_BARRIER_SYNC_RENDER_TARGET, D3D12_BARRIER_ACCESS_RENDER_TARGET,
-            D3D12_BARRIER_LAYOUT_PRESENT, D3D12_BARRIER_LAYOUT_RENDER_TARGET,
-            0, 1, 0, 1
-        );
-    }
-
-    D3D12_VIEWPORT viewport{};
-    viewport.Width = 800.0f;
-    viewport.Height = 600.0f;
-    viewport.MinDepth = 0.0f;
-    viewport.MaxDepth = 1.0f;
-
-    D3D12_RECT scissor{};
-    scissor.right = 800;
-    scissor.bottom = 600;
-
-   
-
     D3D12_RENDER_PASS_DEPTH_STENCIL_DESC depthDesc{};
-    D3D12_RENDER_PASS_RENDER_TARGET_DESC rtvDesc{};
-
-    const FLOAT clearColor[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
 
 
-    rtvDesc.BeginningAccess.Type = D3D12_RENDER_PASS_BEGINNING_ACCESS_TYPE_CLEAR;
-    memcpy(rtvDesc.BeginningAccess.Clear.ClearValue.Color, clearColor, sizeof(FLOAT) * 4);
-    rtvDesc.BeginningAccess.Clear.ClearValue.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-    rtvDesc.cpuDescriptor = rtvHandle;
-    rtvDesc.EndingAccess.Type = D3D12_RENDER_PASS_ENDING_ACCESS_TYPE_PRESERVE;
- /*   rtvDesc.EndingAccess.Resolve.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-    rtvDesc.EndingAccess.Resolve.PreserveResolveSource = FALSE;
-    rtvDesc.EndingAccess.Resolve.pSrcResource = backBuffer;
-    rtvDesc.EndingAccess.Resolve.pDstResource = NULL;
-    rtvDesc.EndingAccess.Resolve.SubresourceCount = 0;
-    rtvDesc.EndingAccess.Resolve.ResolveMode = D3D12_RESOLVE_MODE_AVERAGE;
-    rtvDesc.EndingAccess.Resolve.pSubresourceParameters = NULL; */
 
     depthDesc.cpuDescriptor = dsvHandle;
     depthDesc.DepthBeginningAccess.Type = D3D12_RENDER_PASS_BEGINNING_ACCESS_TYPE_CLEAR;
@@ -1164,12 +1115,11 @@ int Render()
     depthDesc.StencilBeginningAccess.Type = D3D12_RENDER_PASS_BEGINNING_ACCESS_TYPE_NO_ACCESS;
     depthDesc.StencilEndingAccess.Type = D3D12_RENDER_PASS_ENDING_ACCESS_TYPE_NO_ACCESS;
 
+    FLOAT clearColor[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
 
-    commandRecorder.BeginRenderPass(1, &rtvDesc, &depthDesc, D3D12_RENDER_PASS_FLAG_NONE);
+    deviceInstance.TransitionSWCImageToRenderTarget(swapChain, currentImageIndex, &commandRecorder);
 
-
-    commandRecorder.SetScissor(1, &scissor);
-    commandRecorder.SetViewports(1, &viewport);
+    deviceInstance.BeginRenderPassForSWC(swapChain, currentImageIndex, clearColor, &depthDesc, &commandRecorder, D3D12_RENDER_PASS_BEGINNING_ACCESS_TYPE_CLEAR, D3D12_RENDER_PASS_ENDING_ACCESS_TYPE_PRESERVE);
 
     for (int i = 0; i < 2; i++)
     {
@@ -1179,16 +1129,8 @@ int Render()
 
     commandRecorder.EndRenderPass();
 
-    {
-        commandRecorder.TransitionImageResource(backBufferResource,
-            
-                D3D12_BARRIER_SYNC_RENDER_TARGET, D3D12_BARRIER_ACCESS_RENDER_TARGET,
-                D3D12_BARRIER_SYNC_NONE, D3D12_BARRIER_ACCESS_NO_ACCESS,
-                 D3D12_BARRIER_LAYOUT_RENDER_TARGET, D3D12_BARRIER_LAYOUT_PRESENT,
-                0, 1, 0, 1
-            );
-    }
-
+    deviceInstance.TransitionSWCToPresent(swapChain, currentImageIndex, &commandRecorder);
+    
     if (commandRecorder.CloseCommandBuffer())
     {
         printf("Cannot finish recording command buffer\n");
@@ -1200,28 +1142,16 @@ int Render()
 
     deviceInstance.ExecuteCommandListsOnQueue(queueHandle, commandLists, cmdListIndex);
 
-
-  //  UINT syncInterval = g_VSync ? 1 : 0;
-
-
-   // UINT presentFlags = g_TearingSupported && !g_VSync ? DXGI_PRESENT_ALLOW_TEARING : 0;
+    //  UINT syncInterval = g_VSync ? 1 : 0;
 
 
-    IDXGISwapChain4* lSwapChain = (IDXGISwapChain4*)deviceInstance.GetAndValidateItem(swapChain, DXGISWAPCHAIN);
-
-    if (FAILED(lSwapChain->Present(0, 0)))
-    {
-        printf("Cannot present image\n");
-        return -1;
-    }
+    // UINT presentFlags = g_TearingSupported && !g_VSync ? DXGI_PRESENT_ALLOW_TEARING : 0;
+ 
+    deviceInstance.PresentSwapChainImage(swapChain, 0, 0);
 
     g_FrameFenceValues[currentFrame] = deviceInstance.Signal(queueHandle, globalRendererFence);
 
-    currentImageIndex = lSwapChain->GetCurrentBackBufferIndex();
-
     currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
-
-    deviceInstance.WaitForFenceValue(globalRendererFence, g_FrameFenceValues[currentFrame], UINT32_MAX);
 
     return 0;
 }

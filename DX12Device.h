@@ -30,11 +30,12 @@ enum DX12ComType
     D12DESCRIPTORMANAGER = 14,
     D12PIPELINEOBJECT = 15,
     D12COMMANDBUFFEROBJECT = 16,
-    D12SWAPCHAININSTANCE = 17,
+    HOLDER = 17,
     D12IMAGEHANDLE = 18,
     D12IMAGEVIEW = 19,
     D12SAMPLER = 20,
-    D12BUFFERVIEW = 21
+    D12BUFFERVIEW = 21,
+    D12SWAPCHAINHANDLE = 22,
 };
 
 struct DX12PoolItem
@@ -129,6 +130,17 @@ struct DX12BufferView
 struct DX12SamplerHandle
 {
 
+};
+
+struct DX12SwapChain
+{
+    EntryHandle dxgiSwapChainHandle;
+    EntryHandle rtvDescriptorHeap;
+    EntryHandle* backBufferResources;
+    UINT numberOfImages;
+    DXGI_FORMAT rtvFormat;
+    UINT width;
+    UINT height;
 };
 
 struct DX12GraphicsCommandRecorder
@@ -597,6 +609,20 @@ struct DX12Device
     void CreateBufferUAVDescriptor(EntryHandle bufferPoolHandle, EntryHandle viewIndex, UINT subViewIndex, DX12DescriptorHeapManager* heap, UINT heapIndex);
 
     void CreateBufferCBVDescriptor(EntryHandle bufferPoolHandle, EntryHandle viewIndex, UINT subViewIndex, DX12DescriptorHeapManager* heap, UINT heapIndex);
+
+    EntryHandle CreateSwapChainHandle(HWND hWnd, EntryHandle commandQueue, UINT numberOfImages, UINT width, UINT height, DXGI_FORMAT format);
+
+    void TransitionSWCImageToRenderTarget(EntryHandle swcIndex, UINT currentImage, DX12GraphicsCommandRecorder* recorder);
+
+    void BeginRenderPassForSWC(EntryHandle swcIndex, UINT currentImage, FLOAT clearColor[4], D3D12_RENDER_PASS_DEPTH_STENCIL_DESC* depthDesc, DX12GraphicsCommandRecorder* recorder, D3D12_RENDER_PASS_BEGINNING_ACCESS_TYPE beginningAccess, D3D12_RENDER_PASS_ENDING_ACCESS_TYPE endingAccess);
+
+    void BeginRenderPassForSWCMSAA(EntryHandle swcIndex, UINT currentImage, FLOAT clearColor[4], D3D12_RENDER_PASS_DEPTH_STENCIL_DESC* depthDesc, DX12GraphicsCommandRecorder* recorder, D3D12_RENDER_PASS_BEGINNING_ACCESS_TYPE beginningAccess);
+    
+    void TransitionSWCToPresent(EntryHandle swcIndex, UINT currentImageIndex, DX12GraphicsCommandRecorder* recorder);
+
+    int PresentSwapChainImage(EntryHandle swcIndex, UINT syncIntervalFlag, UINT presentFlags);
+
+    UINT AcquireNextImageFromSWC(EntryHandle swcIndex);
 
     void CopyDescriptors(UINT numDescriptors, UINT startInSrc, UINT startInDst, EntryHandle srcHeap, EntryHandle destHeap, UINT srcHeapSize, UINT dstHeapSize, D3D12_DESCRIPTOR_HEAP_TYPE type);
 
