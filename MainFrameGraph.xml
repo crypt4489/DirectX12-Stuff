@@ -1,0 +1,10 @@
+<AttachmentResource imageType="swc" format="b8g8r8a8">
+</AttachmentResource>
+<AttachmentResource imageType="static" format="d32f">
+</AttachmentResource>
+<Attachments>
+	<ColorAttachment resource="0" loadOp="clear" storeOp="store" srcLayout="undefined" dstLayout="present">
+	</ColorAttachment>
+	<DepthAttachment resource="1" loadOp="clear" storeOp="discard" srcLayout="undefined" dstLayout="dsv">
+	</DepthAttachment>
+</Attachments>

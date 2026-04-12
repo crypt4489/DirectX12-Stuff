@@ -123,7 +123,8 @@
     <PostBuildEvent>
       <Command>XCOPY "$(SolutionDir)d3dcompiler_47.dll" "$(OutDir)" /K /Y
 XCOPY "$(SolutionDir)PS.bin" "$(OutDir)" /K /Y
-XCOPY "$(SolutionDir)VS.bin" "$(OutDir)" /K /Y</Command>
+XCOPY "$(SolutionDir)VS.bin" "$(OutDir)" /K /Y
+XCOPY "$(SolutionDir)*.xml" "$(OutDir)" /K /Y</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -146,6 +147,7 @@ XCOPY "$(SolutionDir)VS.bin" "$(OutDir)" /K /Y</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="ancillarydefined.cpp" />
     <ClCompile Include="DX12Device.cpp" />
     <ClCompile Include="main.cpp" />
   </ItemGroup>
@@ -167,6 +169,7 @@ XCOPY "$(SolutionDir)VS.bin" "$(OutDir)" /K /Y</Command>
   <ItemGroup>
     <Xml Include="DirectLayout.xml" />
     <Xml Include="GenericPipeline.xml" />
+    <Xml Include="MainFrameGraph.xml" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

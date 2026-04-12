@@ -7,11 +7,13 @@
 
 typedef size_t EntryHandle;
 
-/* common types */
-
 #define KiB 1024
 #define MiB 1024 * KiB
 #define GiB 1024 * MiB
+
+
+#define UNBOUNDED_DESCRIPTOR_ARRAY ((uint32_t)1 << 31)
+#define DESCRIPTOR_COUNT_MASK 0x7FFFFFFF
 
 /* Rendering State Types */
 
@@ -70,7 +72,10 @@ enum class ImageLayout
     WRITEABLE = 1,
     SHADERREADABLE = 2,
     COLORATTACHMENT = 3,
-    DEPTHSTENCILATTACHMENT = 4
+    DEPTHSTENCILATTACHMENT = 4,
+    PRESENT = 5,
+    DEPTHATTACHMENT = 6,
+    STENCILATTACHMENT = 7,
 };
 
 enum class ImageUsage
@@ -198,6 +203,7 @@ enum ShaderStageTypeBits
     COMPUTESHADERSTAGE = 4,
 };
 
+
 typedef int ShaderStageType;
 
 struct ShaderResourceSetTemplate
@@ -209,6 +215,7 @@ struct ShaderResourceSetTemplate
     int samplerCount;
     int viewCount;
     int constantsCount;
+    int constantStageCount;
 };
 
 struct ShaderResource
@@ -302,11 +309,18 @@ struct ShaderResourceUpdate
     int dataSize;
 };
 
-struct ResourceArrayUpdate
+struct DeviceHandleArrayUpdate
 {
-    int dstBegin;
-    int count;
-    EntryHandle* handles;
+    int resourceDstBegin;
+    int resourceCount;
+    EntryHandle* resourceHandles;
+};
+
+struct BufferArrayUpdate
+{
+    int resourceDstBegin;
+    int allocationCount;
+    int* allocationIndices;
 };
 
 
@@ -346,24 +360,13 @@ struct ComputeIntermediaryPipelineInfo
 
 /* Host memory update */
 
-struct HostTransferRegion
+struct BufferMemoryTransferRegion
 {
-    TransferType type;
+    void* data;
     int size;
     int copyCount;
     int allocationIndex;
     int allocoffset;
-    void* data;
-};
-
-struct DeviceTransferRegion
-{
-    TransferType transferType;
-    int size;
-    int copyCount;
-    int allocationIndex;
-    int allocoffset;
-    void* data;
 };
 
 struct TextureMemoryRegion
@@ -377,12 +380,6 @@ struct TextureMemoryRegion
     int mipLevels;
     int layers;
     ImageFormat format;
-};
-
-struct TransferRegionLink
-{
-    int region;
-    int next;
 };
 
 struct TransferCommand
@@ -399,7 +396,6 @@ struct TransferCommand
 /* Allocation management */
 struct RenderAllocation
 {
-    EntryHandle memIndex;
     size_t offset;
     size_t deviceAllocSize;
     size_t requestedSize;
@@ -408,8 +404,8 @@ struct RenderAllocation
     AllocationType allocType;
     ComponentFormatType formatType;
     int structureCopies;
+    int memIndex;
 };
-
 
 
 /* */
@@ -519,8 +515,208 @@ struct PipelineHandle
     int group;
     int indexForHandles;
     int numHandles;
-    int graphIndex;
-    int graphCount;
+    int pipelineIdentifierGroup;
+};
+
+enum class AttachmentDescriptionType
+{
+    COLORATTACH = 0,
+    RESOLVEATTACH = 1,
+    DEPTHATTACH = 2,
+    STENCILATTACH = 3,
+    DEPTHSTENCILATTACH = 4,
+};
+
+enum class AttachmentViewType
+{
+    SWAPCHAIN = 1,
+    STATIC = 2,
+};
+
+enum class AttachmentLoadUsage
+{
+    ATTACHNOCARE = 1,
+    ATTACHCLEAR = 2,
+};
+
+enum class AttachmentStoreUsage
+{
+    ATTACHDISCARD = 1,
+    ATTACHSTORE = 2
+};
+
+
+struct AttachmentResource
+{
+    AttachmentViewType viewType;
+    ImageFormat format;
+    int msaa;
+};
+
+struct AttachmentDescription
+{
+    AttachmentDescriptionType attachType;
+    AttachmentLoadUsage loadOp;
+    AttachmentStoreUsage storeOp;
+    ImageLayout srcLayout;
+    ImageLayout dstLayout;
+    int resourceIndex;
+};
+
+enum class RenderPassType
+{
+    SWAPCHAIN_IMAGE_COUNT = 1,
+    PER_FRAME_IMAGE_COUNT = 2
+};
+
+struct AttachmentRenderPass
+{
+    int attachmentCount;
+    int resolveCount;
+    int depthStencilCount;
+    int colorCount;
+    AttachmentDescription descs[8];
+};
+
+struct AttachmentGraph
+{
+    int passesCount;
+    int resourceCount;
+    AttachmentRenderPass holders[4];
+    AttachmentResource resources[12];
+};
+
+enum class AttachmentResourceInstanceUsage
+{
+    COLOR_ATTACHMENT_USAGE = 1,
+    DEPTH_ATTACHMENT_USAGE = 2,
+    STENCIL_ATTACHMENT_USAGE = 4,
+    RESOLVE_ATTACHMENT_USAGE = 8,
+    PRESERVE_ATTACHMENT_USAGE = 16,
+    INPUT_ATTACHMENT_USAGE = 32,
+    DEPTH_STENCIL_ATTACHMENT_USAGE = 64,
+};
+
+struct AttachmentResourceInstance
+{
+    EntryHandle** attachmentImage;
+    EntryHandle** attachmentImageView;
+    AttachmentResourceInstanceUsage usage;
+    int sampLo;
+    int sampHi;
+    int imageCount;
+};
+
+enum RPClearType
+{
+    NOCLEAR = 0,
+    CLEARCOLOR = 1,
+    CLEARDEPTH = 2
+};
+
+union ClearVal {
+    struct {
+        float cdata[4];
+    };
+    struct {
+        float ddata;
+        uint32_t sdata;
+    };
+};
+
+struct AttachmentClear
+{
+    RPClearType type;
+    ClearVal val;
+};
+
+struct AttachmentInstance
+{
+    AttachmentDescription* descLayout;
+    int attachmentResource;
+    AttachmentClear clear;
+};
+
+struct AttachmentRenderPassInstance
+{
+    AttachmentInstance* attachInst;
+    int attachInstCount;
+    int maxSampleCount;
+    int baseRenderTargetData;
+    int baseRenderPassData;
+    int currentSampleCount;
+    int graphicsOTQIndex;
+    RenderPassType rpType;
+
+};
+
+struct AttachmentGraphInstance
+{
+    AttachmentGraph* graphLayout;
+    AttachmentResourceInstance* resources;
+    AttachmentRenderPassInstance* passes;
+    int consecutiveRenderPassBase;
+    int consecutiveRenderTargetsBase;
+};
+
+
+
+struct PipelineInstanceData
+{
+    int frameGraphIndices[4];
+    int frameGraphRenderPasses[4];
+    int frameGraphPipelineIndices[4];
+    int frameGraphCount;
+    int pipelineCount;
+};
+
+enum GPUCommandStreamType
+{
+    ATTACHMENT_COMMANDS = 1,
+    COMPUTE_QUEUE_COMMANDS = 2,
+};
+
+struct GPUCommand
+{
+    GPUCommandStreamType streamType;
+    int indexForStreamType;
+};
+
+enum VertexComponents
+{
+    POSITION = 1,
+    TEXTURE0 = 2,
+    TEXTURE1 = 4,
+    TEXTURE2 = 8,
+    NORMAL = 16,
+    BONES2 = 32,
+    COLOR = 64,
+    TANGENT = 128,
+    COMPRESSED = 0x80000000,
+};
+
+constexpr float dx = 3.051851e-05f;
+constexpr float ax = 0.0009770395f;
+constexpr float bx = 0.0019550342f;
+
+
+enum BufferType
+{
+    HOST_MEMORY_TYPE = 1,
+    DEVICE_MEMORY_TYPE = 2,
+};
+
+enum BufferAlignmentType
+{
+    NO_BUFFER_ALIGNMENT = 0,
+    UNIFORM_BUFFER_ALIGNMENT = 1,
+    STORAGE_BUFFER_ALIGNMENT = 2,
+};
+
+struct StringView
+{
+    char* stringData;
+    int charCount;
 };
 
 struct ShaderMap
@@ -557,35 +753,21 @@ struct ShaderDetails
     void* GetShaderData();
 };
 
-ShaderDetails* ShaderDetails::GetNext()
-{
-    return (ShaderDetails*)((uintptr_t)this + sizeof(ShaderDetails) + shaderDataSize + shaderNameSize);
-}
-
-char* ShaderDetails::GetString()
-{
-    return (char*)((uintptr_t)this + sizeof(ShaderDetails));
-}
-
-void* ShaderDetails::GetShaderData()
-{
-    return (void*)((uintptr_t)this + sizeof(ShaderDetails) + shaderNameSize);
-}
-
-
-
 struct ShaderXMLTag
 {
     unsigned long hashCode;
 };
-struct ShaderDetailsXMLTag : ShaderXMLTag //followed by shaderNameLen Bytes
+
+struct ShaderGLSLShaderXMLTag : ShaderXMLTag //followed by shaderNameLen Bytes
 {
     ShaderStageType type;
 };
+
 struct ShaderComputeLayoutXMLTag : ShaderXMLTag
 {
     ShaderComputeLayout comps;
 };
+
 struct ShaderResourceItemXMLTag : ShaderXMLTag
 {
     ShaderStageType shaderstage;
@@ -594,21 +776,19 @@ struct ShaderResourceItemXMLTag : ShaderXMLTag
     int arrayCount;
     int size;
     int offset;
+    int pushRangeStage;
 };
+
 struct ShaderResourceSetXMLTag : ShaderXMLTag
 {
     int resourceCount;
 };
+
 static constexpr unsigned long
 hash(char* str);
 
 static constexpr unsigned long
 hash(const std::string& string);
-static ShaderGraph* CreateShaderGraph(
-    const std::string& filename,
-    char* detailsData,
-    ShaderDetails** details
-);
 
 static int ProcessTag(char* fileData, int size, int currentLocation, unsigned long* hash, bool* opening);
 
@@ -622,8 +802,6 @@ static int ReadAttributeValueHash(char* fileData, int size, int currentLocation,
 static int ReadAttributeValueVal(char* fileData, int size, int currentLocation, unsigned long* val);
 
 static int ReadAttributes(char* fileData, int size, int currentLocation, unsigned long* hashes, int* stackSize);
-
-static int HandleShader(char* fileData, int size, int currentLocation, uintptr_t* offset, void* shaderData, int* shaderDataSize);
 
 static int HandleShaderResourceItem(char* fileData, int size, int currentLocation, uintptr_t* offset);
 
@@ -664,570 +842,8 @@ static_assert(sizeof(BitmapInfoHeader) == 40, "no match for bih");
 
 
 
-uintptr_t ShaderGraph::GetSet(int setIndex)
-{
-    uintptr_t head = (uintptr_t)(this) + sizeof(ShaderGraph) + (setIndex * sizeof(ShaderResourceSetTemplate));
-    return head;
-}
-
-uintptr_t ShaderGraph::GetResource(int resourceIndex)
-{
-    uintptr_t head = (uintptr_t)(this) + sizeof(ShaderGraph) + (resourceSetCount * sizeof(ShaderResourceSetTemplate)) + (shaderMapCount * sizeof(ShaderMap));
-
-    head += (sizeof(ShaderResource) * resourceIndex);
-
-    return head;
-}
-
-uintptr_t ShaderGraph::GetMap(int mapIndex)
-{
-    uintptr_t head = (uintptr_t)(this) + sizeof(ShaderGraph) + (resourceSetCount * sizeof(ShaderResourceSetTemplate)) + (mapIndex * sizeof(ShaderMap));
-
-    return head;
-}
-
-int ShaderGraph::GetGraphSize() const
-{
-    int size = sizeof(ShaderGraph) + (resourceSetCount * sizeof(ShaderResourceSetTemplate)) + (shaderMapCount * sizeof(ShaderMap)) + (resourceCount * sizeof(ShaderResource));
-    return size;
-}
-int ShaderMap::GetMapSize() const
-{
-    return sizeof(ShaderMap);
-}
-#include <stdexcept>
-
-
-
-constexpr unsigned long
-hash(char* str)
-{
-    unsigned long hash = 5381;
-    int c;
-
-    while (c = *str++) {
-        if (((c - 'A') >= 0 && (c - 'Z') <= 0) || ((c - 'a') >= 0 && (c - 'z') <= 0))
-            hash = ((hash << 5) + hash) + c; /* hash * 33 + c */
-    }
-
-    return hash;
-}
-
-constexpr unsigned long
-hash(const std::string& string)
-{
-    unsigned long hash = 5381;
-    int c;
-
-    const char* str = string.c_str();
-
-    while (c = *str++) {
-        if (((c - 'A') >= 0 && (c - 'Z') <= 0) || ((c - 'a') >= 0 && (c - 'z') <= 0) || ((c - '0') >= 0 && (c - '9') <= 0))
-            hash = ((hash << 5) + hash) + c; /* hash * 33 + c */
-    }
-
-    return hash;
-}
-
-char readerMemBuffer[64 * 1024];
-size_t readerMemBufferAllocate = 0;
-
-
-int ProcessTag(char* fileData, int size, int currentLocation, unsigned long* hash, bool* opening)
-{
-    int count = 0;
-    char* data = fileData + currentLocation;
-
-    unsigned long hashl = 5381;
-
-    while (currentLocation + count < size)
-    {
-        if (std::isspace(data[count]) && hashl == 5381)
-        {
-            count++;
-            continue;
-        }
-
-        if (data[count] != '<' && hashl == 5381)
-            throw std::runtime_error("malformed xml tag");
-
-        if (data[count] == '\n' || data[count] == ' ' || data[count] == '>')
-        {
-            count++;
-            break;
-        }
-
-        if (data[count] == '<')
-        {
-            count++;
-            if (data[count] == '/')
-            {
-                *opening = false;
-                count++;
-            }
-        }
-
-        hashl = ((hashl << 5) + hashl) + data[count];
-
-        count++;
-    }
-
-    *hash = hashl;
-
-    return count;
-}
-
-int SkipLine(char* fileData, int size, int currentLocation)
-{
-    int count = 0;
-    char* data = fileData + currentLocation;
-
-    while (currentLocation + count < size && data[count++] != '\n');
-    data = fileData + currentLocation + count;
-    return count;
-}
-
-int ReadValue(char* fileData, int size, int currentLocation, char* str, int* len)
-{
-    int memCounter = 0;
-    int count = 0;
-    char* data = fileData + currentLocation;
-    while (true)
-    {
-        int test = count++;
-
-        int c = data[test];
-
-        if (c == '\n')
-        {
-            count = count - 1;
-            break;
-        }
-
-        if (std::isspace(c))
-            continue;
-
-        str[memCounter++] = c;
-
-    }
-
-    str[memCounter++] = 0;
-
-    *len = (memCounter);
-
-    return count;
-}
-#define MAX_ATTRIBUTE_LEN 50
-int ReadAttributeName(char* fileData, int size, int currentLocation, unsigned long* hash)
-{
-    int count = 0;
-    char* data = fileData + currentLocation;
-
-    unsigned long hashl = 5381;
-
-
-    while (true)
-    {
-        int test = count++;
-
-        int c = data[test];
-
-        if (c == '>')
-        {
-            count = count - 1;
-            break;
-        }
-
-        if (c == '=')
-            break;
-
-        if (std::isspace(c))
-            continue;
-
-        if (count == MAX_ATTRIBUTE_LEN + currentLocation)
-            throw std::runtime_error("malformed xml attribute");
-
-        hashl = ((hashl << 5) + hashl) + c;
-
-    }
-
-    *hash = hashl;
-
-    return count;
-}
-
-int ReadAttributeValueHash(char* fileData, int size, int currentLocation, unsigned long* hash)
-{
-    int count = 0;
-    char* data = fileData + currentLocation;
-
-    unsigned long hashl = 5381;
-
-    while (true)
-    {
-        int test = count++;
-
-        int c = data[test];
-
-        if (c == '>')
-        {
-            count = count - 1;
-            break;
-        }
-
-        if (std::isspace(c))
-        {
-            if (hashl == 5381)
-                continue;
-            else
-                break;
-        }
-
-        if (c == '\"' || c == '\'')
-            continue;
-
-        if (count == MAX_ATTRIBUTE_LEN + currentLocation) {
-            throw std::runtime_error("malformed xml attribute");
-        }
-
-        hashl = ((hashl << 5) + hashl) + c;
-
-    }
-
-    *hash = hashl;
-
-    return count;
-}
-
-int ReadAttributeValueVal(char* fileData, int size, int currentLocation, unsigned long* val)
-{
-    int count = 0;
-    char* data = fileData + currentLocation;
-
-    unsigned long out = 0;
-    bool readingVal = false;
-
-    while (true)
-    {
-        int test = count++;
-
-        int c = data[test];
-
-        if (c == '>')
-        {
-            count = count - 1;
-            break;
-        }
-
-        if (std::isspace(c))
-        {
-            if (readingVal)
-                break;
-            continue;
-        }
-
-        if (c == '\"' || c == '\'')
-        {
-            if (readingVal)
-                break;
-            continue;
-        }
-
-        if (count == (MAX_ATTRIBUTE_LEN + currentLocation) || ((c - '0') < 0 || (c - '9') > 0)) {
-            throw std::runtime_error("malformed xml attribute");
-        }
-
-        out = (out * 10) + (c - '0');
-        readingVal = true;
-
-    }
-
-    *val = out;
-
-    return count;
-}
-
-#define MAX_ATTRIBUTE_LINE_LEN 200
-
-int ReadAttributes(char* fileData, int size, int currentLocation, unsigned long* hashes, int* stackSize)
-{
-    int count = 0;
-    char* data = fileData + currentLocation;
-
-    int ret = 0;
-    char c = data[ret];
-
-    while (c != '>' && ret < MAX_ATTRIBUTE_LINE_LEN && (currentLocation + ret) < size)
-    {
-        ret += ReadAttributeName(fileData, size, currentLocation + ret, &hashes[count]);
-
-        switch (hashes[count])
-        {
-        case hash("type"):
-        case hash("used"):
-        case hash("rw"):
-        {
-            ret += ReadAttributeValueHash(fileData, size, currentLocation + ret, &hashes[count + 1]);
-            break;
-        }
-        case hash("offset"):
-        case hash("size"):
-        case hash("count"):
-        case hash("x"):
-        case hash("y"):
-        case hash("z"):
-        {
-            ret += ReadAttributeValueVal(fileData, size, currentLocation + ret, &hashes[count + 1]);
-            break;
-        }
-        }
-        c = data[ret];
-        count += 2;
-    }
-
-    *stackSize = count;
-
-    while (c != '\n' && ret < MAX_ATTRIBUTE_LINE_LEN && (currentLocation + ret) < size)
-    {
-        c = data[ret++];
-    }
-
-    return ret;
-}
-
-
-
-int HandleShader(char* fileData, int size, int currentLocation, uintptr_t* offset, void* shaderData, int* shaderDataSize)
-{
-    unsigned long hashes[6];
-
-    int glslSize = 0;
-
-    int ret = ReadAttributes(fileData, size, currentLocation, hashes, &glslSize);
-
-    uintptr_t detailHead = (uintptr_t)shaderData;
-
-    ShaderDetails* details = (ShaderDetails*)detailHead;
-
-    details->shaderDataSize = 0;
-    details->shaderNameSize = 0;
-
-    detailHead += sizeof(ShaderDetails);
-
-    ShaderDetailsXMLTag* tag = (ShaderDetailsXMLTag*)&readerMemBuffer[readerMemBufferAllocate];
-
-    *offset = (uintptr_t)tag;
-
-    tag->hashCode = hash("HLSLShader");
-
-    int stackIter = 0;
-
-    while (glslSize > stackIter)
-    {
-        unsigned long code = hashes[stackIter];
-        unsigned long codeV = hashes[stackIter + 1];
-
-        switch (code)
-        {
-        case hash("type"):
-        {
-            switch (codeV)
-            {
-            case hash("compute"):
-                details->shaderDataSize = 12;
-                tag->type = ShaderStageTypeBits::COMPUTESHADERSTAGE;
-                break;
-            case hash("vert"):
-                tag->type = ShaderStageTypeBits::VERTEXSHADERSTAGE;
-                break;
-            case hash("fragment"):
-                tag->type = ShaderStageTypeBits::FRAGMENTSHADERSTAGE;
-                break;
-            }
-            break;
-        }
-
-        default:
-            throw std::runtime_error("Failed Type of Shader");
-            break;
-        }
-
-        stackIter += 2;
-    }
-
-    readerMemBufferAllocate += sizeof(ShaderDetailsXMLTag);
-
-    ret += ReadValue(fileData, size, currentLocation + ret, details->GetString(), &details->shaderNameSize);
-
-    *shaderDataSize = (sizeof(ShaderDetails) + details->shaderNameSize + details->shaderDataSize);
-
-    return ret;
-}
-
-int HandleShaderResourceItem(char* fileData, int size, int currentLocation, uintptr_t* offset)
-{
-    unsigned long hashes[12];
-
-    int dataSize = 0;
-
-    int ret = ReadAttributes(fileData, size, currentLocation, hashes, &dataSize);
-
-    ShaderResourceItemXMLTag* tag = (ShaderResourceItemXMLTag*)&readerMemBuffer[readerMemBufferAllocate];
-
-    *offset = (uintptr_t)tag;
-
-    tag->hashCode = hash("ShaderResourceItem");
-
-    tag->arrayCount = 1;
-
-    int stackIter = 0;
-
-    while (dataSize > stackIter)
-    {
-        unsigned long code = hashes[stackIter];
-        unsigned long codeV = hashes[stackIter + 1];
-        switch (code)
-        {
-        case hash("type"):
-        {
-            switch (codeV)
-            {
-            case hash("samplerCube"):
-                tag->resourceType = ShaderResourceType::SAMPLERCUBE;
-                tag->resourceAction = ShaderResourceAction::SHADERREAD;
-                break;
-            case hash("sampler2d"):
-                tag->resourceType = ShaderResourceType::SAMPLER2D;
-                tag->resourceAction = ShaderResourceAction::SHADERREAD;
-                break;
-            case hash("storageImage2D"):
-                tag->resourceType = ShaderResourceType::IMAGESTORE2D;
-                break;
-            case hash("image2D"):
-                tag->resourceType = ShaderResourceType::IMAGE2D;
-                tag->resourceAction = ShaderResourceAction::SHADERREAD;
-                break;
-            case hash("sampler"):
-                tag->resourceType = ShaderResourceType::SAMPLERSTATE;
-                break;
-            case hash("storage"):
-                tag->resourceType = ShaderResourceType::STORAGE_BUFFER;
-                break;
-            case hash("uniform"):
-                tag->resourceType = ShaderResourceType::UNIFORM_BUFFER;
-                tag->resourceAction = ShaderResourceAction::SHADERREAD;
-                break;
-            case hash("constantbuffer"):
-                tag->resourceType = ShaderResourceType::CONSTANT_BUFFER;
-                tag->resourceAction = ShaderResourceAction::SHADERREAD;
-                break;
-            case hash("sampler3d"):
-                tag->resourceType = ShaderResourceType::SAMPLER3D;
-                tag->resourceAction = ShaderResourceAction::SHADERREAD;
-                break;
-            case hash("bufferView"):
-                tag->resourceType = ShaderResourceType::BUFFER_VIEW;
-                break;
-            default:
-                throw std::runtime_error("Failed Resource Type");
-            }
-
-            break;
-        }
-        case hash("used"):
-        {
-            switch (codeV)
-            {
-            case hash("c"):
-                tag->shaderstage = ShaderStageTypeBits::COMPUTESHADERSTAGE;
-                break;
-            case hash("v"):
-                tag->shaderstage = ShaderStageTypeBits::VERTEXSHADERSTAGE;
-                break;
-            case hash("f"):
-                tag->shaderstage = ShaderStageTypeBits::FRAGMENTSHADERSTAGE;
-                break;
-            case hash("vf"):
-                tag->shaderstage = ShaderStageTypeBits::VERTEXSHADERSTAGE | ShaderStageTypeBits::FRAGMENTSHADERSTAGE;
-                break;
-            default:
-                throw std::runtime_error("Failed Used Type");
-            }
-
-            break;
-        }
-        case hash("rw"):
-        {
-            switch (codeV)
-            {
-            case hash("read"):
-                tag->resourceAction = ShaderResourceAction::SHADERREAD;
-                break;
-            case hash("write"):
-                tag->resourceAction = ShaderResourceAction::SHADERWRITE;
-                break;
-            case hash("readwrite"):
-                tag->resourceAction = ShaderResourceAction::SHADERREADWRITE;
-                break;
-            default:
-                throw std::runtime_error("Failed Action Type");
-            }
-
-            break;
-        }
-        case hash("count"):
-        {
-            tag->arrayCount = codeV;
-            break;
-        }
-        case hash("size"):
-        {
-            tag->size = codeV;
-            break;
-        }
-        case hash("offset"):
-        {
-            tag->offset = codeV;
-            break;
-        }
-        }
-
-        stackIter += 2;
-    }
-
-    readerMemBufferAllocate += sizeof(ShaderResourceItemXMLTag);
-
-    return ret;
-}
-
-
-constexpr int ASCIIToInt(char* str)
-{
-    int c;
-    int out = 0;
-
-    while (c = *str++) {
-        if ((c - '0') >= 0 && (c - '9') <= 0)
-            out = (out * 10) + (c - '0');
-    }
-
-    return out;
-}
-
-static char AllocateDSMemory[16 * 1024];
-uintptr_t DSAllocator = 0;
-
-std::array<uintptr_t, 50> descriptorSets;
-static int DSIndex = 0;
-
-constexpr std::array<int, 50> makeArray(int val) {
-    std::array<int, 50> arr{};
-    std::fill(arr.begin(), arr.end(), val);
-    return arr;
-}
-
-std::array<int, 50> srvDescriptorTablesStart = makeArray(-1);
-
+extern std::array<int, 50> srvDescriptorTablesStart;
+extern std::array<uintptr_t, 50> descriptorSets;
 /*
 void SetVariableArrayCount(int descriptorSet, int bindingIndex, int varArrayCount)
 {
@@ -1248,1093 +864,131 @@ void SetVariableArrayCount(int descriptorSet, int bindingIndex, int varArrayCoun
 }
 */
 
-void BindBufferToShaderResource(int descriptorSet, int* allocationIndex, int* offsets, int firstBuffer, int bufferCount, int bindingIndex)
+int AllocateShaderResourceSet(ShaderGraph* graph, uint32_t targetSet, int setCount);
+void UploadConstant(int descriptorset, void* data, int bufferLocation);
+int GetConstantBufferCount(int descriptorSet);
+ShaderResourceHeader* GetConstantBuffer(int descriptorSet, int constantBuffer);
+void BindImageBarrier(int descriptorSet, int binding, int barrierIndex, BarrierStage stage, BarrierAction action, ImageLayout oldLayout, ImageLayout dstLayout, bool location);
+void BindBarrier(int descriptorSet, int binding, BarrierStage stage, BarrierAction action);
+void BindBufferView(int descriptorSet, int* allocationIndex, int firstView, int viewCount, int bindingIndex);
+void BindSampledImageArrayToShaderResource(int descriptorSet, EntryHandle* indices, int texCount, int firstTexture, int bindingIndex);
+void BindSampledImageToShaderResource(int descriptorSet, EntryHandle* index, int textureCount, int firstTexture, int bindingIndex);
+void BindSamplerResourceToShaderResource(int descriptorSet, EntryHandle* indices, int samplerCount, int firstSampler, int bindingIndex);
+void BindImageResourceToShaderResource(int descriptorSet, EntryHandle* index, int textureCount, int firstTexture, int bindingIndex);
+void BindBufferToShaderResource(int descriptorSet, int* allocationIndex, int* offsets, int firstBuffer, int bufferCount, int bindingIndex);
+
+#include <atomic>
+
+
+template <typename T_AtomicType>
+T_AtomicType UpdateAtomic(std::atomic<T_AtomicType>& atomic, T_AtomicType stride, T_AtomicType wrapAroundSize, T_AtomicType alignment)
 {
-    uintptr_t head = descriptorSets[descriptorSet];
-    ShaderResourceSet* set = (ShaderResourceSet*)head;
-    uintptr_t* setOffsets = (uintptr_t*)(head + sizeof(ShaderResourceSet));
-
-    ShaderResourceBuffer* header = (ShaderResourceBuffer*)setOffsets[bindingIndex];
-
-    if (header->type != ShaderResourceType::UNIFORM_BUFFER && header->type != ShaderResourceType::STORAGE_BUFFER)
-        return;
-
-    header->allocationIndex = allocationIndex;
-    header->offsets = offsets;
-    header->firstBuffer = firstBuffer;
-    header->bufferCount = bufferCount;
-}
-
-void BindImageResourceToShaderResource(int descriptorSet, EntryHandle* index, int textureCount, int firstTexture, int bindingIndex)
-{
-    uintptr_t head = descriptorSets[descriptorSet];
-    ShaderResourceSet* set = (ShaderResourceSet*)head;
-    uintptr_t* offsets = (uintptr_t*)(head + sizeof(ShaderResourceSet));
-
-    ShaderResourceImage* header = (ShaderResourceImage*)offsets[bindingIndex];
-
-    if (header->type != ShaderResourceType::IMAGESTORE2D && header->type != ShaderResourceType::IMAGE2D)
-        return;
-
-    header->textureHandles = index;
-    header->textureCount = textureCount;
-    header->firstTexture = firstTexture;
-}
-
-void BindSamplerResourceToShaderResource(int descriptorSet, EntryHandle* indices, int samplerCount, int firstSampler, int bindingIndex)
-{
-    uintptr_t head = descriptorSets[descriptorSet];
-    ShaderResourceSet* set = (ShaderResourceSet*)head;
-    uintptr_t* offsets = (uintptr_t*)(head + sizeof(ShaderResourceSet));
-
-    ShaderResourceSampler* header = (ShaderResourceSampler*)offsets[bindingIndex];
-
-    if (header->type != ShaderResourceType::SAMPLERSTATE)
-        return;
-
-    header->samplerHandles = indices;
-    header->samplerCount = samplerCount;
-    header->firstSampler = firstSampler;
-}
-
-void BindSampledImageToShaderResource(int descriptorSet, EntryHandle* index, int textureCount, int firstTexture, int bindingIndex)
-{
-    uintptr_t head = descriptorSets[descriptorSet];
-    ShaderResourceSet* set = (ShaderResourceSet*)head;
-    uintptr_t* offsets = (uintptr_t*)(head + sizeof(ShaderResourceSet));
-
-    ShaderResourceImage* header = (ShaderResourceImage*)offsets[bindingIndex];
-
-    if (header->type != ShaderResourceType::SAMPLER2D && header->type != ShaderResourceType::SAMPLERCUBE && header->type != ShaderResourceType::SAMPLER3D)
-        return;
-
-    header->textureHandles = index;
-    header->textureCount = textureCount;
-    header->firstTexture = firstTexture;
-}
-
-void BindSampledImageArrayToShaderResource(int descriptorSet, EntryHandle* indices, int texCount, int firstTexture, int bindingIndex)
-{
-    uintptr_t head = descriptorSets[descriptorSet];
-    ShaderResourceSet* set = (ShaderResourceSet*)head;
-    uintptr_t* offsets = (uintptr_t*)(head + sizeof(ShaderResourceSet));
-
-    ShaderResourceImage* header = (ShaderResourceImage*)offsets[bindingIndex];
-
-    if (header->type != ShaderResourceType::SAMPLER3D && header->type != ShaderResourceType::SAMPLER2D && header->type != ShaderResourceType::SAMPLERCUBE)
-        return;
-
-    header->textureHandles = indices;
-    header->textureCount = texCount;
-    header->firstTexture = firstTexture;
-}
-
-void BindBufferView(int descriptorSet, int* allocationIndex, int firstView, int viewCount, int bindingIndex)
-{
-    uintptr_t head = descriptorSets[descriptorSet];
-    ShaderResourceSet* set = (ShaderResourceSet*)head;
-    uintptr_t* offsets = (uintptr_t*)(head + sizeof(ShaderResourceSet));
-
-    ShaderResourceBufferView* header = (ShaderResourceBufferView*)offsets[bindingIndex];
-
-    if (header->type != ShaderResourceType::BUFFER_VIEW)
-        return;
-
-
-    header->viewCount = viewCount;
-    header->firstView = firstView;
-    header->allocationIndex = allocationIndex;
-}
-
-void BindBarrier(int descriptorSet, int binding, BarrierStage stage, BarrierAction action)
-{
-    uintptr_t head = descriptorSets[descriptorSet];
-    ShaderResourceSet* set = (ShaderResourceSet*)head;
-    uintptr_t* offsets = (uintptr_t*)(head + sizeof(ShaderResourceSet));
-
-
-    head = offsets[binding];
-    ShaderResourceHeader* desc = (ShaderResourceHeader*)offsets[binding];
-
-
-
-    switch (desc->type)
-    {
-    case ShaderResourceType::IMAGE2D:
-    case ShaderResourceType::IMAGESTORE2D:
-    case ShaderResourceType::SAMPLER2D:
-    {
-        head += sizeof(ShaderResourceImage);
-        ShaderResourceBarrier* barrier = (ShaderResourceBarrier*)head;
-
-        barrier->dstAction = action;
-        barrier->dstStage = stage;
-        break;
-    }
-    case ShaderResourceType::BUFFER_VIEW:
-    {
-        head += sizeof(ShaderResourceBufferView);
-        ShaderResourceBufferBarrier* barrier = (ShaderResourceBufferBarrier*)head;
-        barrier->dstStage = stage;
-        barrier->dstAction = action;
-        break;
-    }
-    case ShaderResourceType::STORAGE_BUFFER:
-    case ShaderResourceType::UNIFORM_BUFFER:
-    {
-
-        head += sizeof(ShaderResourceBuffer);
-        ShaderResourceBufferBarrier* barrier = (ShaderResourceBufferBarrier*)head;
-        barrier->dstStage = stage;
-        barrier->dstAction = action;
-        break;
-    }
-    }
-
-
-}
-
-void BindImageBarrier(int descriptorSet, int binding, int barrierIndex, BarrierStage stage, BarrierAction action, ImageLayout oldLayout, ImageLayout dstLayout, bool location)
-{
-    uintptr_t head = descriptorSets[descriptorSet];
-    ShaderResourceSet* set = (ShaderResourceSet*)head;
-    uintptr_t* offsets = (uintptr_t*)(head + sizeof(ShaderResourceSet));
-
-
-    head = offsets[binding];
-    ShaderResourceHeader* desc = (ShaderResourceHeader*)offsets[binding];
-
-    if (desc->type != ShaderResourceType::SAMPLER2D && desc->type != ShaderResourceType::SAMPLERCUBE && desc->type != ShaderResourceType::SAMPLER3D && desc->type != ShaderResourceType::IMAGESTORE2D && desc->type != ShaderResourceType::IMAGE2D)
-        return;
-
-    switch (desc->type)
-    {
-    case ShaderResourceType::IMAGE2D:
-    case ShaderResourceType::IMAGESTORE2D:
-    case ShaderResourceType::SAMPLER2D:
-        head += sizeof(ShaderResourceImage);
-
-        break;
-    case ShaderResourceType::STORAGE_BUFFER:
-    case ShaderResourceType::UNIFORM_BUFFER:
-
-        head += sizeof(ShaderResourceBuffer);
-        break;
-    }
-
-
-    ImageShaderResourceBarrier* imageBarrier = (ImageShaderResourceBarrier*)head;
-
-
-    imageBarrier[barrierIndex].imageType = ImageUsage::COLOR;
-    imageBarrier[barrierIndex].dstResourceLayout = dstLayout;
-    imageBarrier[barrierIndex].srcResourceLayout = oldLayout;
-
-    if (location)
-    {
-        imageBarrier[barrierIndex].dstAction = action;
-        imageBarrier[barrierIndex].dstStage = stage;
-    }
-    else {
-        imageBarrier[barrierIndex].srcAction = action;
-        imageBarrier[barrierIndex].srcStage = stage;
-    }
-}
-
-ShaderResourceHeader* GetConstantBuffer(int descriptorSet, int constantBuffer)
-{
-    uintptr_t head = descriptorSets[descriptorSet];
-    ShaderResourceSet* set = (ShaderResourceSet*)head;
-    uintptr_t* offsets = (uintptr_t*)(head + sizeof(ShaderResourceSet));
-
-    ShaderResourceHeader* ret = (ShaderResourceHeader*)(offsets[set->bindingCount - (constantBuffer + 1)]);
-
-    if (ret->type != ShaderResourceType::CONSTANT_BUFFER) return nullptr;
-
-    return ret;
-}
-
-int GetConstantBufferCount(int descriptorSet)
-{
-    uintptr_t head = descriptorSets[descriptorSet];
-    ShaderResourceSet* set = (ShaderResourceSet*)head;
-    uintptr_t* offsets = (uintptr_t*)(head + sizeof(ShaderResourceSet));
-
-    int iter = set->bindingCount - 1;
-
-    int count = 0;
-
-    while (iter >= 0)
-    {
-        ShaderResourceHeader* ret = (ShaderResourceHeader*)(offsets[iter--]);
-        if (ret->type == ShaderResourceType::CONSTANT_BUFFER) count++;
-        else break;
-    }
-
-    return count;
-}
-
-int GetBarrierCount(int descriptorSet)
-{
-    uintptr_t head = descriptorSets[descriptorSet];
-    ShaderResourceSet* set = (ShaderResourceSet*)head;
-    return set->barrierCount;
-}
-
-void UploadConstant(int descriptorset, void* data, int bufferLocation)
-{
-    ShaderResourceConstantBuffer* header = (ShaderResourceConstantBuffer*)GetConstantBuffer(descriptorset, bufferLocation);
-    if (!header) return;
-    header->data = data;
-}
-
-int AllocateShaderResourceSet(ShaderGraph* graph, uint32_t targetSet, int setCount)
-{
-    uintptr_t head = (uintptr_t)AllocateDSMemory + DSAllocator;
-
-    uintptr_t ptr = head;
-    ShaderResourceSet* set = (ShaderResourceSet*)ptr;
-    ptr += sizeof(ShaderResourceSet);
-
-
-    ShaderResourceSetTemplate* resourceSet = (ShaderResourceSetTemplate*)graph->GetSet(targetSet);
-
-    set->bindingCount = resourceSet->bindingCount;
-    set->layoutHandle = resourceSet->vulkanDescLayout;
-    set->setCount = setCount;
-    set->barrierCount = 0;
-    set->samplerCount = resourceSet->samplerCount;
-    set->viewCount = resourceSet->viewCount;
-
-    uintptr_t* offset = (uintptr_t*)ptr;
-
-    ptr += sizeof(uintptr_t) * (set->bindingCount);
-
-
-    int constantCount = set->bindingCount;
-    for (int h = 0; h < set->bindingCount; h++)
-    {
-        MemoryBarrierType memBarrierType = MemoryBarrierType::MEMORY_BARRIER;
-
-        ShaderResource* resource = (ShaderResource*)graph->GetResource(resourceSet->resourceStart + h);
-
-        if (resource->set != targetSet) continue;
-
-        ShaderResourceHeader* desc = (ShaderResourceHeader*)ptr;
-
-        if (resource->binding != ~0)
-            desc->binding = resource->binding;
-        else
-            desc->binding = --constantCount;
-
-        desc->type = resource->type;
-        desc->action = resource->action;
-        desc->arrayCount = resource->arrayCount;
-
-        offset[desc->binding] = ptr;
-
-        switch (resource->type)
+    T_AtomicType val, desired, out;
+    val = atomic.load(std::memory_order_relaxed);
+    do {
+        out = (val + alignment - 1) & ~(alignment - 1);
+
+        if (wrapAroundSize && out >= wrapAroundSize)
         {
-        case ShaderResourceType::SAMPLERSTATE:
-        {
-            ShaderResourceSampler* image = (ShaderResourceSampler*)ptr;
-            image->samplerHandles = nullptr;
-            image->samplerCount = 0;
-            image->firstSampler = 0;
-            ptr += sizeof(ShaderResourceSampler);
-            break;
-        }
-        case ShaderResourceType::IMAGE2D:
-        case ShaderResourceType::IMAGESTORE2D:
-        {
-            ShaderResourceImage* image = (ShaderResourceImage*)ptr;
-            image->textureHandles = nullptr;
-            image->textureCount = 0;
-            image->firstTexture = 0;
-            ptr += sizeof(ShaderResourceImage);
-            memBarrierType = MemoryBarrierType::IMAGE_BARRIER;
-            if (resource->action == ShaderResourceAction::SHADERWRITE || resource->action == ShaderResourceAction::SHADERREADWRITE)
-            {
-                ImageShaderResourceBarrier* barriers = (ImageShaderResourceBarrier*)ptr;
-                //barriers->dstStage = ConvertShaderStageToBarrierStage(resource->stages);
-                barriers->dstAction = WRITE_SHADER_RESOURCE;
-                barriers->type = memBarrierType;
-
-              //  barriers[1].srcStage = ConvertShaderStageToBarrierStage(resource->stages);
-                barriers[1].srcAction = WRITE_SHADER_RESOURCE;
-                barriers[1].type = memBarrierType;
-
-                ptr += (sizeof(ImageShaderResourceBarrier) * 2);
-                set->barrierCount += 2;
-            }
-            break;
-        }
-        case ShaderResourceType::SAMPLER3D:
-        case ShaderResourceType::SAMPLER2D:
-        case ShaderResourceType::SAMPLERCUBE:
-        {
-            ShaderResourceImage* image = (ShaderResourceImage*)ptr;
-            image->textureHandles = nullptr;
-            image->textureCount = 0;
-            image->firstTexture = 0;
-
-            ptr += sizeof(ShaderResourceImage);
-            memBarrierType = MemoryBarrierType::IMAGE_BARRIER;
-            if (resource->action == ShaderResourceAction::SHADERWRITE || resource->action == ShaderResourceAction::SHADERREADWRITE)
-            {
-                ImageShaderResourceBarrier* barriers = (ImageShaderResourceBarrier*)ptr;
-               // barriers->srcStage = ConvertShaderStageToBarrierStage(resource->stages);
-                barriers->srcAction = WRITE_SHADER_RESOURCE;
-                barriers->type = memBarrierType;
-                ptr += (sizeof(ImageShaderResourceBarrier));
-                set->barrierCount++;
-            }
-            break;
-        }
-        case ShaderResourceType::CONSTANT_BUFFER:
-        {
-            ShaderResourceConstantBuffer* constants = (ShaderResourceConstantBuffer*)ptr;
-            constants->size = resource->size;
-            constants->offset = resource->offset;
-            constants->stage = resource->stages;
-            ptr += sizeof(ShaderResourceConstantBuffer);
-            break;
-        }
-        case ShaderResourceType::STORAGE_BUFFER:
-        case ShaderResourceType::UNIFORM_BUFFER:
-        {
-            memBarrierType = MemoryBarrierType::BUFFER_BARRIER;
-            ptr += sizeof(ShaderResourceBuffer);
-            if (resource->action == ShaderResourceAction::SHADERWRITE || resource->action == ShaderResourceAction::SHADERREADWRITE)
-            {
-                ShaderResourceBarrier* barriers = (ShaderResourceBarrier*)ptr;
-               // barriers->srcStage = ConvertShaderStageToBarrierStage(resource->stages);
-                barriers->srcAction = WRITE_SHADER_RESOURCE;
-                barriers->type = memBarrierType;
-                ptr += (sizeof(ShaderResourceBufferBarrier));
-                set->barrierCount++;
-            }
-            break;
-        }
-        case ShaderResourceType::BUFFER_VIEW:
-        {
-            memBarrierType = MemoryBarrierType::BUFFER_BARRIER;
-            ptr += sizeof(ShaderResourceBufferView);
-            if (resource->action == ShaderResourceAction::SHADERWRITE || resource->action == ShaderResourceAction::SHADERREADWRITE)
-            {
-                ShaderResourceBarrier* barriers = (ShaderResourceBarrier*)ptr;
-               // barriers->srcStage = ConvertShaderStageToBarrierStage(resource->stages);
-                barriers->srcAction = WRITE_SHADER_RESOURCE;
-                barriers->type = memBarrierType;
-                ptr += (sizeof(ShaderResourceBufferBarrier));
-                set->barrierCount++;
-            }
-            break;
-        }
+            out = 0;
         }
 
+        desired = out + stride;
 
-    }
+        if (wrapAroundSize && desired >= wrapAroundSize)
+        {
+            out = 0;
+            desired = stride;
+        }
+    } while (!atomic.compare_exchange_weak(val, desired, std::memory_order_relaxed,
+        std::memory_order_relaxed));
 
-    DSAllocator += ptr - head;
+    return out;
+}
 
+template <typename T_AtomicType>
+T_AtomicType UpdateAtomic(std::atomic<T_AtomicType>& atomic, T_AtomicType stride, T_AtomicType wrapAroundSize)
+{
+    T_AtomicType val, desired, out;
+    val = atomic.load(std::memory_order_relaxed);
+    do {
+        out = val;
+        desired = val + stride;
+        if (wrapAroundSize && desired >= wrapAroundSize)
+        {
+            out = 0;
+            desired = stride;
+        }
+    } while (!atomic.compare_exchange_weak(val, desired, std::memory_order_relaxed,
+        std::memory_order_relaxed));
 
-    int ret = DSIndex++;
-
-    descriptorSets[ret] = head;
-
-    return ret;
+    return out;
 }
 
 
-struct PipelineXMLTag
+struct RingAllocator
 {
-    unsigned long hashCode;
-};
+    void* dataHead;
+    int dataSize;
+    std::atomic<int> dataAllocator;
+    constexpr RingAllocator(void* _dataHead, int _size) :
+        dataSize(_size), dataAllocator(0), dataHead(_dataHead)
+    {
 
-struct PipelineDescriptionXMLTag : PipelineXMLTag //followed by shaderNameLen Bytes
-{
-    int sampLo;
-    int sampHi;
-};
+    }
+    void* Allocate(int _allocSize);
+    void* Allocate(int _allocSize, int alignment);
+    void Reset();
+    void* Head();
+    void* CAllocate(int _allocSize, int alignment);
+    void* CAllocate(int _allocSize);
 
-struct PrimitiveXMLTag : PipelineXMLTag
-{
-    PrimitiveType primType;
-};
-
-struct DepthXMLTag : PipelineXMLTag
-{
-    bool enabled;
-    RasterizerTest depthOp;
-};
-
-struct CullModeXMLTag : PipelineXMLTag
-{
-    CullMode mode;
+    StringView* AllocateFromNullString(const char* name);
+    StringView AllocateFromNullStringCopy(const char* name);
 };
 
 
-int HandleComputeLayout(char* fileData, int size, int currentLocation, uintptr_t* offset)
+struct SlabAllocator
 {
-    unsigned long hashesAndVals[6];
-
-    int dataSize = 0;
-
-    int ret = ReadAttributes(fileData, size, currentLocation, hashesAndVals, &dataSize);
-
-    ShaderComputeLayoutXMLTag* tag = (ShaderComputeLayoutXMLTag*)&readerMemBuffer[readerMemBufferAllocate];
-
-    *offset = (uintptr_t)tag;
-
-    tag->hashCode = hash("ComputeLayout");
-
-    int stackIter = 0;
-
-    while (dataSize > stackIter)
+    void* dataHead;
+    int dataSize;
+    std::atomic<int> dataAllocator;
+    constexpr SlabAllocator(void* _dataHead, int _size) :
+        dataSize(_size), dataAllocator(0), dataHead(_dataHead)
     {
-        unsigned long code = hashesAndVals[stackIter];
-        unsigned long comp = hashesAndVals[stackIter + 1];
 
-        switch (code)
-        {
-        case hash("x"):
-        {
-            tag->comps.x = comp;
-
-            break;
-        }
-        case hash("y"):
-        {
-            tag->comps.y = comp;
-            break;
-        }
-        case hash("z"):
-        {
-            tag->comps.z = comp;
-
-            break;
-        }
-        }
-
-        stackIter += 2;
     }
 
-    readerMemBufferAllocate += sizeof(ShaderComputeLayoutXMLTag);
+    void* Allocate(int _allocSize, int alignment);
+    void* Allocate(int _allocSize);
+    void Reset();
+    void* Head();
+    void* CAllocate(int _allocSize, int alignment);
+    void* CAllocate(int _allocSize);
 
-    return ret;
-}
+    StringView* AllocateFromNullString(const char* name);
+    StringView AllocateFromNullStringCopy(const char* name);
+};
 
-
-
-int ReadAttributesPipeline(char* fileData, int size, int currentLocation, unsigned long* hashes, int* stackSize)
+struct DeviceSlabAllocator
 {
-    int count = 0;
-    char* data = fileData + currentLocation;
-
-    int ret = 0;
-    char c = data[ret];
-
-    while (c != '>' && ret < MAX_ATTRIBUTE_LINE_LEN && (currentLocation + ret) < size)
+    int dataSize;
+    std::atomic<int> dataAllocator;
+    constexpr DeviceSlabAllocator(int _size) :
+        dataSize(_size), dataAllocator(0)
     {
-        ret += ReadAttributeName(fileData, size, currentLocation + ret, &hashes[count]);
 
-        switch (hashes[count])
-        {
-        case hash("op"):
-        case hash("type"):
-        case hash("mode"):
-        case hash("format"):
-        case hash("usage"):
-        case hash("rate"):
-        case hash("winding"):
-        case hash("write"):
-        case hash("failop"):
-        case hash("passop"):
-        case hash("depthfailop"):
-        case hash("compareop"):
-        {
-            ret += ReadAttributeValueHash(fileData, size, currentLocation + ret, &hashes[count + 1]);
-            break;
-        }
-        case hash("writemask"):
-        case hash("comparemask"):
-        case hash("ref"):
-        case hash("offset"):
-        case hash("sampLo"):
-        case hash("sampHi"):
-        case hash("size"):
-        {
-            ret += ReadAttributeValueVal(fileData, size, currentLocation + ret, &hashes[count + 1]);
-            break;
-        }
-        }
-        c = data[ret];
-        count += 2;
     }
+    int Allocate(int _allocSize, int alignment);
+};
 
-    *stackSize = count;
 
-    while (c != '\n' && ret < MAX_ATTRIBUTE_LINE_LEN && (currentLocation + ret) < size)
-    {
-        c = data[ret++];
-    }
+ShaderGraph* CreateShaderGraph(StringView filename, RingAllocator* readerMemory, SlabAllocator* graphAllocator, SlabAllocator* shaderAllocator, int* shaderDetailCount);
 
-    return ret;
-}
+void CreatePipelineDescription(StringView filename, GenericPipelineStateInfo* stateInfo, RingAllocator* tempAllocator);
 
-static int HandlePipelineDescription(char* fileData, int size, int currentLocation, GenericPipelineStateInfo* stateInfo)
-{
-    unsigned long hashes[6];
-
-    int attrSize = 0;
-
-    int ret = ReadAttributesPipeline(fileData, size, currentLocation, hashes, &attrSize);
-
-    int stackIter = 0;
-
-    while (attrSize > stackIter)
-    {
-        unsigned long code = hashes[stackIter];
-        unsigned long codeV = hashes[stackIter + 1];
-
-        switch (code)
-        {
-        case hash("sampLo"):
-        {
-            stateInfo->sampleCountLow = codeV;
-            break;
-        }
-        case hash("sampHi"):
-        {
-            stateInfo->sampleCountHigh = codeV;
-            break;
-        }
-
-        default:
-            throw std::runtime_error("Failed Pipeline Description");
-            break;
-        }
-
-        stackIter += 2;
-    }
-
-    return ret;
-}
-
-int HandleCullMode(char* fileData, int size, int currentLocation, GenericPipelineStateInfo* stateInfo)
-{
-    unsigned long hashes[6];
-
-    int attrSize = 0;
-
-    int ret = ReadAttributesPipeline(fileData, size, currentLocation, hashes, &attrSize);
-
-    int stackIter = 0;
-
-    while (attrSize > stackIter)
-    {
-        unsigned long code = hashes[stackIter];
-        unsigned long codeV = hashes[stackIter + 1];
-
-        switch (code)
-        {
-        case hash("mode"):
-        {
-            switch (codeV)
-            {
-            case hash("none"):
-                stateInfo->cullMode = CullMode::CULL_NONE;
-                break;
-
-            case hash("back"):
-                stateInfo->cullMode = CullMode::CULL_BACK;
-                break;
-
-            case hash("front"):
-                stateInfo->cullMode = CullMode::CULL_FRONT;
-                break;
-
-            default:
-                throw std::runtime_error("Invalid Cull Mode");
-            }
-            break;
-        }
-        case hash("winding"):
-        {
-            switch (codeV)
-            {
-            case hash("cw"):
-                stateInfo->windingOrder = TriangleWinding::CW;
-                break;
-
-            case hash("ccw"):
-                stateInfo->windingOrder = TriangleWinding::CCW;
-                break;
-
-            default:
-                throw std::runtime_error("Invalid Winding");
-            }
-            break;
-        }
-
-        default:
-            throw std::runtime_error("Failed Cull");
-        }
-
-        stackIter += 2;
-    }
-
-    return ret;
-}
-
-int HandleDepthTest(char* fileData, int size, int currentLocation, GenericPipelineStateInfo* stateInfo)
-{
-    unsigned long hashes[6];
-
-    int attrSize = 0;
-
-    int ret = ReadAttributesPipeline(fileData, size, currentLocation, hashes, &attrSize);
-
-    int stackIter = 0;
-
-    stateInfo->depthEnable = true;
-
-    while (attrSize > stackIter)
-    {
-        unsigned long code = hashes[stackIter];
-        unsigned long codeV = hashes[stackIter + 1];
-
-        switch (code)
-        {
-        case hash("write"):
-        {
-            switch (codeV)
-            {
-            case hash("true"):
-            {
-                stateInfo->depthWrite = true;
-                break;
-            }
-            case hash("false"):
-            {
-                stateInfo->depthWrite = false;
-                break;
-            }
-            }
-            break;
-        }
-
-        case hash("op"):
-        {
-            switch (codeV)
-            {
-            case hash("never"):
-                stateInfo->depthTest = NEVER;
-                break;
-
-            case hash("less"):
-                stateInfo->depthTest = LESS;
-                break;
-
-            case hash("equal"):
-                stateInfo->depthTest = EQUAL;
-                break;
-
-            case hash("lessequal"):
-                stateInfo->depthTest = LESSEQUAL;
-                break;
-
-            case hash("greater"):
-                stateInfo->depthTest = GREATER;
-                break;
-
-            case hash("notequal"):
-                stateInfo->depthTest = NOTEQUAL;
-                break;
-
-            case hash("greaterequal"):
-                stateInfo->depthTest = GREATEREQUAL;
-                break;
-
-            case hash("always"):
-                stateInfo->depthTest = ALLPASS;
-                break;
-
-            default:
-                throw std::runtime_error("Invalid Depth Compare Op");
-            }
-            break;
-        }
-
-        default:
-            throw std::runtime_error("Failed Depth Mode");
-        }
-
-        stackIter += 2;
-    }
-
-    return ret;
-}
-
-StencilOp ParseStencilOp(uint32_t codeV)
-{
-    switch (codeV)
-    {
-    case hash("replace"): return StencilOp::REPLACE;
-    case hash("keep"):    return StencilOp::KEEP;
-    case hash("zero"):    return StencilOp::ZERO;
-    default:              return StencilOp::KEEP;
-    }
-}
-
-static int HandleStencilTest(char* fileData, int size, int currentLocation, FaceStencilData* face)
-{
-    unsigned long hashes[14];
-
-    int attrSize = 0;
-
-    int ret = ReadAttributesPipeline(fileData, size, currentLocation, hashes, &attrSize);
-
-    int stackIter = 0;
-
-    while (attrSize > stackIter)
-    {
-        unsigned long code = hashes[stackIter];
-        unsigned long codeV = hashes[stackIter + 1];
-
-        switch (code)
-        {
-
-        case hash("failop"):
-            face->failOp = ParseStencilOp(codeV);
-            break;
-
-        case hash("passop"):
-            face->passOp = ParseStencilOp(codeV);
-            break;
-
-
-        case hash("depthfailop"):
-            face->depthFailOp = ParseStencilOp(codeV);
-            break;
-
-
-        case hash("compareop"):
-        {
-            switch (codeV)
-            {
-            case hash("never"):
-                face->stencilCompare = NEVER;
-                break;
-
-            case hash("less"):
-                face->stencilCompare = LESS;
-                break;
-
-            case hash("equal"):
-                face->stencilCompare = EQUAL;
-                break;
-
-            case hash("lessequal"):
-                face->stencilCompare = LESSEQUAL;
-                break;
-
-            case hash("greater"):
-                face->stencilCompare = GREATER;
-                break;
-
-            case hash("notequal"):
-                face->stencilCompare = NOTEQUAL;
-                break;
-
-            case hash("greaterequal"):
-                face->stencilCompare = GREATEREQUAL;
-                break;
-
-            case hash("always"):
-                face->stencilCompare = ALLPASS;
-                break;
-
-            default:
-                throw std::runtime_error("Invalid Stencil Compare Op");
-            }
-            break;
-        }
-
-        case hash("writemask"):
-        {
-            face->writeMask = codeV;
-            break;
-        }
-
-        case hash("comparemask"):
-        {
-            face->compareMask = codeV;
-            break;
-        }
-
-        case hash("ref"):
-        {
-            face->reference = codeV;
-            break;
-        }
-
-        default:
-            throw std::runtime_error("Failed Depth Mode");
-        }
-
-        stackIter += 2;
-    }
-
-    return ret;
-}
-
-int HandlePrimitiveType(char* fileData, int size, int currentLocation, GenericPipelineStateInfo* stateInfo)
-{
-    unsigned long hashes[6];
-
-    int attrSize = 0;
-
-    int ret = ReadAttributesPipeline(fileData, size, currentLocation, hashes, &attrSize);
-
-    int stackIter = 0;
-
-    while (attrSize > stackIter)
-    {
-        unsigned long code = hashes[stackIter];
-        unsigned long codeV = hashes[stackIter + 1];
-
-        switch (code)
-        {
-        case hash("type"):
-        {
-            switch (codeV)
-            {
-            case hash("trilists"):
-                stateInfo->primType = TRIANGLES;
-                break;
-
-            case hash("tristrips"):
-                stateInfo->primType = TRISTRIPS;
-                break;
-
-            case hash("trifans"):
-                stateInfo->primType = TRIFAN;
-                break;
-
-            case hash("points"):
-                stateInfo->primType = POINTSLIST;
-                break;
-
-            case hash("linelists"):
-                stateInfo->primType = LINELIST;
-                break;
-
-            case hash("linestrips"):
-                stateInfo->primType = LINESTRIPS;
-                break;
-
-            default:
-                throw std::runtime_error("Invalid Primitive Type");
-            }
-            break;
-        }
-        case hash("size"):
-        {
-            stateInfo->lineWidth = (float)codeV;
-            break;
-        }
-
-        default:
-            throw std::runtime_error("Failed Prim Mode");
-        }
-
-        stackIter += 2;
-    }
-
-    return ret;
-}
-
-int HandleVertexComponentInput(char* fileData, int size, int currentLocation, GenericPipelineStateInfo* stateInfo, int vertexBufferInputLocation, int perVertexSlotLocation)
-{
-    unsigned long hashes[8];
-
-    int attrSize = 0;
-
-    int ret = ReadAttributesPipeline(fileData, size, currentLocation, hashes, &attrSize);
-
-    int stackIter = 0;
-
-    while (attrSize > stackIter)
-    {
-        unsigned long code = hashes[stackIter];
-        unsigned long codeV = hashes[stackIter + 1];
-
-        switch (code)
-        {
-        case hash("usage"):
-        {
-            switch (codeV)
-            {
-            case hash("POS0"):
-                stateInfo->vertexBufferDesc[vertexBufferInputLocation].descriptions[perVertexSlotLocation].vertexusage = VertexUsage::POSITION;
-                break;
-
-            case hash("TEX0"):
-                stateInfo->vertexBufferDesc[vertexBufferInputLocation].descriptions[perVertexSlotLocation].vertexusage = VertexUsage::TEX0;
-                break;
-
-            case hash("TEX1"):
-                stateInfo->vertexBufferDesc[vertexBufferInputLocation].descriptions[perVertexSlotLocation].vertexusage = VertexUsage::TEX1;
-                break;
-
-            case hash("TEX2"):
-                stateInfo->vertexBufferDesc[vertexBufferInputLocation].descriptions[perVertexSlotLocation].vertexusage = VertexUsage::TEX2;
-                break;
-
-            case hash("TEX3"):
-                stateInfo->vertexBufferDesc[vertexBufferInputLocation].descriptions[perVertexSlotLocation].vertexusage = VertexUsage::TEX3;
-                break;
-
-            case hash("NORMAL"):
-                stateInfo->vertexBufferDesc[vertexBufferInputLocation].descriptions[perVertexSlotLocation].vertexusage = VertexUsage::NORMAL;
-                break;
-
-            case hash("BONES"):
-                stateInfo->vertexBufferDesc[vertexBufferInputLocation].descriptions[perVertexSlotLocation].vertexusage = VertexUsage::BONES;
-                break;
-
-            case hash("WEIGHTS"):
-                stateInfo->vertexBufferDesc[vertexBufferInputLocation].descriptions[perVertexSlotLocation].vertexusage = VertexUsage::WEIGHTS;
-                break;
-
-            case hash("COLOR0"):
-                stateInfo->vertexBufferDesc[vertexBufferInputLocation].descriptions[perVertexSlotLocation].vertexusage = VertexUsage::COLOR0;
-                break;
-
-            default:
-                throw std::runtime_error("Invalid vertex usage");
-            }
-            break;
-        }
-
-        case hash("format"):
-        {
-            switch (codeV)
-            {
-            case hash("uint"):
-                stateInfo->vertexBufferDesc[vertexBufferInputLocation].descriptions[perVertexSlotLocation].format = ComponentFormatType::R32_UINT;
-                break;
-
-            case hash("int"):
-                stateInfo->vertexBufferDesc[vertexBufferInputLocation].descriptions[perVertexSlotLocation].format = ComponentFormatType::R32_SINT;
-                break;
-
-            case hash("vec4"):
-                stateInfo->vertexBufferDesc[vertexBufferInputLocation].descriptions[perVertexSlotLocation].format = ComponentFormatType::R32G32B32A32_SFLOAT;
-                break;
-
-            case hash("vec3"):
-                stateInfo->vertexBufferDesc[vertexBufferInputLocation].descriptions[perVertexSlotLocation].format = ComponentFormatType::R32G32B32_SFLOAT;
-                break;
-
-            case hash("vec2"):
-                stateInfo->vertexBufferDesc[vertexBufferInputLocation].descriptions[perVertexSlotLocation].format = ComponentFormatType::R32G32_SFLOAT;
-                break;
-
-            case hash("float"):
-                stateInfo->vertexBufferDesc[vertexBufferInputLocation].descriptions[perVertexSlotLocation].format = ComponentFormatType::R32_SFLOAT;
-                break;
-
-            case hash("ivec2"):
-                stateInfo->vertexBufferDesc[vertexBufferInputLocation].descriptions[perVertexSlotLocation].format = ComponentFormatType::R32G32_SINT;
-                break;
-
-            case hash("u8vec2"):
-                stateInfo->vertexBufferDesc[vertexBufferInputLocation].descriptions[perVertexSlotLocation].format = ComponentFormatType::R8G8_UINT;
-                break;
-
-            case hash("i16vec2"):
-                stateInfo->vertexBufferDesc[vertexBufferInputLocation].descriptions[perVertexSlotLocation].format = ComponentFormatType::R16G16_SINT;
-                break;
-
-            case hash("i16vec3"):
-                stateInfo->vertexBufferDesc[vertexBufferInputLocation].descriptions[perVertexSlotLocation].format = ComponentFormatType::R16G16B16_SINT;
-                break;
-
-            default:
-                throw std::runtime_error("Invalid vertex format");
-            }
-            break;
-        }
-
-        case hash("offset"):
-        {
-            stateInfo->vertexBufferDesc[vertexBufferInputLocation].descriptions[perVertexSlotLocation].byteoffset = codeV;
-            break;
-        }
-
-        default:
-            throw std::runtime_error("Failed Vertex Component");
-        }
-
-        stackIter += 2;
-    }
-
-    return ret;
-}
-
-int HandleVertexInput(char* fileData, int size, int currentLocation, GenericPipelineStateInfo* stateInfo, int vertexBufferInputLocation)
-{
-    unsigned long hashes[6];
-
-    int attrSize = 0;
-
-    int ret = ReadAttributesPipeline(fileData, size, currentLocation, hashes, &attrSize);
-
-    int stackIter = 0;
-
-    while (attrSize > stackIter)
-    {
-        unsigned long code = hashes[stackIter];
-        unsigned long codeV = hashes[stackIter + 1];
-
-        switch (code)
-        {
-        case hash("rate"):
-        {
-            switch (codeV)
-            {
-            case hash("vertex"):
-            {
-                stateInfo->vertexBufferDesc[vertexBufferInputLocation].rate = VertexBufferRate::PERVERTEX;
-                break;
-            }
-            case hash("instance"):
-            {
-                stateInfo->vertexBufferDesc[vertexBufferInputLocation].rate = VertexBufferRate::PERINSTANCE;
-                break;
-            }
-            }
-            break;
-        }
-        case hash("size"):
-        {
-            stateInfo->vertexBufferDesc[vertexBufferInputLocation].perInputSize = codeV;
-            break;
-        }
-
-        default:
-            throw std::runtime_error("Failed Vertex Input");
-            break;
-        }
-
-        stackIter += 2;
-    }
-
-    return ret;
-}
-
-void CreatePipelineDescription(const std::string& filename, GenericPipelineStateInfo* stateInfo);
-
+void CreateAttachmentGraphFromFile(StringView filename, AttachmentGraph* graph, RingAllocator* inputScratchAllocator);
+static int ReadAttributesAttachments(char* fileData, int size, int currentLocation, unsigned long* hashes, int* stackSize);
+static int HandleAttachment(char* fileData, int size, int currentLocation, AttachmentDescriptionType descType, AttachmentDescription* description);
+static int HandleAttachmentDesc(char* fileData, int size, int currentLocation, AttachmentRenderPass* holder);
+static int HandleAttachmentResource(char* fileData, int size, int currentLocation, AttachmentResource* resource);

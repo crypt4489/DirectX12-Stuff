@@ -317,36 +317,32 @@ EntryHandle DX12Device::CreateDescriptorHeap(D3D12_DESCRIPTOR_HEAP_TYPE type, in
     return AllocTypeForEntry(heap, D12DESCRIPTORHEAP);
 }
 
-int DX12Device::CreateRenderTargetView(EntryHandle swapChainIdx, EntryHandle descriptorHeapIdx, EntryHandle* outBuffers, UINT imageCount)
+int DX12Device::CreateRenderTargetViews(EntryHandle descriptorHeapIdx, EntryHandle* imageResourceHandles, UINT numberOfRenderTargets, UINT numberOfFrameBuffers)
 {
-    UINT rtvDescriptorSize = deviceHandle->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
-
     DX12DescriptorHeapManager* heapManager = (DX12DescriptorHeapManager*)GetAndValidateItem(descriptorHeapIdx, D12DESCRIPTORMANAGER);
-    IDXGISwapChain4* swapChain = (IDXGISwapChain4*)GetAndValidateItem(swapChainIdx, DXGISWAPCHAIN);
     ID3D12DescriptorHeap* heap = (ID3D12DescriptorHeap*)GetAndValidateItem(heapManager->descriptorHeap, D12DESCRIPTORHEAP);
 
-    DX12CPUDescriptorHandle rtvHandle(heap->GetCPUDescriptorHandleForHeapStart());
+    int rtvStart = heapManager->descriptorHeapHandlePointer;
 
-    for (UINT i = 0; i < imageCount; ++i)
+    DX12CPUDescriptorHandle rtvHandle(heap->GetCPUDescriptorHandleForHeapStart(), rtvStart, heapManager->descriptorHeapHandleSize);
+
+    UINT resourceIndex = 0;
+
+    for (UINT i = 0; i < numberOfFrameBuffers; i++)
     {
-        ID3D12Resource* backBuffer;
-
-        if (FAILED(swapChain->GetBuffer(i, IID_PPV_ARGS(&backBuffer))))
+        for (UINT j = 0; j < numberOfRenderTargets; j++)
         {
-            printf("Failed to get back buffer handle from swapchain\n");
-            return -1;
+            ID3D12Resource* backBuffer = (ID3D12Resource*)GetAndValidateItem(imageResourceHandles[resourceIndex++], D12RESOURCEHANDLE);
+
+            deviceHandle->CreateRenderTargetView(backBuffer, NULL, rtvHandle);
+
+            rtvHandle.Advance(1, heapManager->descriptorHeapHandleSize);
         }
-
-        deviceHandle->CreateRenderTargetView(backBuffer, NULL, rtvHandle);
-
-        rtvHandle.Advance(1, rtvDescriptorSize);
-
-        outBuffers[i] = AllocTypeForEntry(backBuffer, D12RESOURCEHANDLE);
-
-        heapManager->descriptorHeapHandlePointer++;
     }
 
-    return 0;
+    heapManager->descriptorHeapHandlePointer = rtvStart + resourceIndex;
+
+    return rtvStart;
 }
 
 ID3D12Heap* DX12Device::CreateDX12Heap(SIZE_T size, SIZE_T alignment, D3D12_HEAP_FLAGS heapFlags, D3D12_HEAP_TYPE heapType)
@@ -407,71 +403,38 @@ EntryHandle DX12Device::CreateDSVRSVMemoryPool(SIZE_T sizeOfPool, SIZE_T alignme
     return CreateImageMemoryPool(sizeOfPool, alignment, D3D12_HEAP_FLAG_ALLOW_ONLY_RT_DS_TEXTURES, D3D12_HEAP_TYPE_DEFAULT);
 }
 
-int DX12Device::CreateDepthStencilView(EntryHandle descriptorHeapIdx, EntryHandle poolIdx, EntryHandle* outBuffers, UINT imageCount, UINT width, UINT height, DXGI_FORMAT format, UINT sampleCount)
+int DX12Device::CreateDepthStencilView(EntryHandle descriptorHeapIdx, EntryHandle* inResources, EntryHandle* inViews, UINT imageCount)
 {
-    UINT dsvDescriptorSize = deviceHandle->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_DSV);
-
     DX12DescriptorHeapManager* heapManager = (DX12DescriptorHeapManager*)GetAndValidateItem(descriptorHeapIdx, D12DESCRIPTORMANAGER);
+
+    int dsvStart = heapManager->descriptorHeapHandlePointer;
 
     ID3D12DescriptorHeap* descHeap = (ID3D12DescriptorHeap*)GetAndValidateItem(heapManager->descriptorHeap, D12DESCRIPTORHEAP);
 
-    DX12ImageMemoryPool* pool = (DX12ImageMemoryPool*)GetAndValidateItem(poolIdx, D12IMAGEMEMORYPOOL);
-
-    DX12CPUDescriptorHandle dsvHandle(descHeap->GetCPUDescriptorHandleForHeapStart());
-
-    ID3D12Heap* heap = (ID3D12Heap*)GetAndValidateItem(pool->heap, D12MEMHEAP);
+    DX12CPUDescriptorHandle dsvHandle(descHeap->GetCPUDescriptorHandleForHeapStart(), dsvStart, heapManager->descriptorHeapHandleSize);
 
     for (UINT i = 0; i < imageCount; ++i)
     {
-        ID3D12Resource* depthBuffer = nullptr;
 
-        D3D12_RESOURCE_DESC depthStencilDesc = {};
-        depthStencilDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-        depthStencilDesc.Width = width;
-        depthStencilDesc.Height = height;
-        depthStencilDesc.Format = format;
-        depthStencilDesc.SampleDesc.Count = sampleCount;
-        depthStencilDesc.SampleDesc.Quality = 0;
-        depthStencilDesc.MipLevels = 1;
-        depthStencilDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
-        depthStencilDesc.DepthOrArraySize = 1;
-        depthStencilDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+        DX12ImageViewHandle* viewHandle = (DX12ImageViewHandle*)GetAndValidateItem(inViews[i], D12IMAGEVIEW);
 
-        D3D12_CLEAR_VALUE clearValue = {};
-        clearValue.Format = DXGI_FORMAT_D32_FLOAT;
-        clearValue.DepthStencil.Depth = 1.0f;
-        clearValue.DepthStencil.Stencil = 0;
-
-        D3D12_RESOURCE_ALLOCATION_INFO allocInfo =
-            deviceHandle->GetResourceAllocationInfo(0, 1, &depthStencilDesc);
-
-        UINT64 location = (pool->currentPointer + allocInfo.Alignment - 1) & ~(allocInfo.Alignment - 1);
-
-        pool->currentPointer += (allocInfo.SizeInBytes + (location - pool->currentPointer));
-
-        if (FAILED(deviceHandle->CreatePlacedResource(heap, location, &depthStencilDesc, D3D12_RESOURCE_STATE_DEPTH_WRITE, &clearValue, IID_PPV_ARGS(&depthBuffer))))
-        {
-            printf("Failed to create depth stencil resource\n");
-            return -1;
-        }
+        ID3D12Resource* depthBuffer = (ID3D12Resource*)GetAndValidateItem(inResources[i], D12RESOURCEHANDLE);
 
         D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc{};
 
         dsvDesc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
-        dsvDesc.Format = DXGI_FORMAT_D32_FLOAT;
+        dsvDesc.Format = viewHandle->shaderViewDesc.Format;
         dsvDesc.Flags = D3D12_DSV_FLAG_NONE;
         dsvDesc.Texture2D.MipSlice = 0;
 
         deviceHandle->CreateDepthStencilView(depthBuffer, &dsvDesc, dsvHandle);
 
-        dsvHandle.Advance(1, dsvDescriptorSize);
-
-        outBuffers[i] = AllocTypeForEntry(depthBuffer, D12RESOURCEHANDLE);
-
-        heapManager->descriptorHeapHandlePointer++;
+        dsvHandle.Advance(1, heapManager->descriptorHeapHandleSize);
     }
 
-    return 0;
+    heapManager->descriptorHeapHandlePointer = dsvStart + imageCount;
+
+    return dsvStart;
 }
 
 IDXGISwapChain4* DX12Device::CreateSwapChain(HWND hWnd, ID3D12CommandQueue* commandQueue, int width, int height, int bufferCount, DXGI_FORMAT format, UINT debug)
@@ -1164,10 +1127,8 @@ EntryHandle DX12Device::CreateGraphicsPipelineObject(DX12PipelineCreationInfo* i
 
 }
 
-ID3D12Resource* DX12Device::CreatePlacedImageResource(DX12ImageMemoryPool* pool, UINT width, UINT height, UINT depth, UINT mips, D3D12_RESOURCE_FLAGS flags, DXGI_FORMAT format, D3D12_RESOURCE_DIMENSION dimension)
+ID3D12Resource* DX12Device::CreatePlacedImageResource(DX12ImageMemoryPool* pool, UINT width, UINT height, UINT depth, UINT mips, D3D12_RESOURCE_FLAGS flags, DXGI_FORMAT format, D3D12_RESOURCE_DIMENSION dimension, D3D12_RESOURCE_STATES resourceState)
 {
-
-
     D3D12_RESOURCE_DESC imageDesc = {};
     imageDesc.Dimension = dimension;
     imageDesc.Alignment = 0;
@@ -1197,7 +1158,7 @@ ID3D12Resource* DX12Device::CreatePlacedImageResource(DX12ImageMemoryPool* pool,
         heap,
         location,
         &imageDesc,
-        D3D12_RESOURCE_STATE_COMMON,
+        resourceState,
         nullptr,
         IID_PPV_ARGS(&imageHandle)
     );
@@ -1213,18 +1174,18 @@ EntryHandle DX12Device::CreateSampledImageHandle(EntryHandle poolIdx, UINT width
     handle->memHeapIndex = poolIdx;
     handle->mipLevels = mips;
     handle->format = format;
-    handle->resourceIndex = CreateImageResourceFromPool(poolIdx, width, height, depth, mips, D3D12_RESOURCE_FLAG_NONE, format, dimension);
+    handle->resourceIndex = CreateImageResourceFromPool(poolIdx, width, height, depth, mips, D3D12_RESOURCE_FLAG_NONE, format, dimension, D3D12_RESOURCE_STATE_COMMON);
 
     handle->views[0] = CreateImageView(format, 0, mips);
 
     return AllocTypeForEntry(handle, D12IMAGEHANDLE);
 }
 
-EntryHandle DX12Device::CreateImageResourceFromPool(EntryHandle poolIdx, UINT width, UINT height, UINT depth, UINT mips, D3D12_RESOURCE_FLAGS flags, DXGI_FORMAT format, D3D12_RESOURCE_DIMENSION dimension)
+EntryHandle DX12Device::CreateImageResourceFromPool(EntryHandle poolIdx, UINT width, UINT height, UINT depth, UINT mips, D3D12_RESOURCE_FLAGS flags, DXGI_FORMAT format, D3D12_RESOURCE_DIMENSION dimension, D3D12_RESOURCE_STATES resourceState)
 {
     DX12ImageMemoryPool* pool = (DX12ImageMemoryPool*)GetAndValidateItem(poolIdx, D12IMAGEMEMORYPOOL);
 
-    ID3D12Resource* resource = CreatePlacedImageResource(pool, width, height, depth, mips, flags, format, dimension);
+    ID3D12Resource* resource = CreatePlacedImageResource(pool, width, height, depth, mips, flags, format, dimension, resourceState);
 
     return AllocTypeForEntry(resource, D12RESOURCEHANDLE);
 }
@@ -1375,15 +1336,30 @@ EntryHandle DX12Device::CreateSwapChainHandle(HWND hWnd, EntryHandle commandQueu
     dx12swc->numberOfImages = numberOfImages;
     dx12swc->dxgiSwapChainHandle = swcChainIndex;
 
-    dx12swc->rtvDescriptorHeap = CreateDescriptorHeapManager(
+  /*  dx12swc->rtvDescriptorHeap = CreateDescriptorHeapManager(
         numberOfImages,
         D3D12_DESCRIPTOR_HEAP_TYPE_RTV,
         D3D12_DESCRIPTOR_HEAP_FLAG_NONE
-    );
+    ); */
 
     dx12swc->backBufferResources = (EntryHandle*)AllocFromDeviceStorage(sizeof(EntryHandle) * numberOfImages, alignof(EntryHandle));
 
-    CreateRenderTargetView(swcChainIndex, dx12swc->rtvDescriptorHeap, dx12swc->backBufferResources, numberOfImages);
+    dx12swc->backbufferViews = (EntryHandle*)AllocFromDeviceStorage(sizeof(EntryHandle) * numberOfImages, alignof(EntryHandle));
+
+    for (UINT i = 0; i < numberOfImages; ++i)
+    {
+        ID3D12Resource* backBuffer;
+
+        if (FAILED(swcChain->GetBuffer(i, IID_PPV_ARGS(&backBuffer))))
+        {
+            printf("Failed to get back buffer handle from swapchain\n");
+            return -1;
+        }
+
+        dx12swc->backBufferResources[i] = AllocTypeForEntry(backBuffer, D12RESOURCEHANDLE);
+
+        dx12swc->backbufferViews[i] = CreateImageView(format, 0, 1);
+    }
 
     return AllocTypeForEntry(dx12swc, D12SWAPCHAINHANDLE);
 }
@@ -1402,45 +1378,24 @@ void DX12Device::TransitionSWCImageToRenderTarget(EntryHandle swcIndex, UINT cur
     );
 }
 
-void DX12Device::BeginRenderPassForSWC(EntryHandle swcIndex, UINT currentImage, FLOAT clearColor[4], D3D12_RENDER_PASS_DEPTH_STENCIL_DESC* depthDesc, DX12GraphicsCommandRecorder* recorder,  D3D12_RENDER_PASS_BEGINNING_ACCESS_TYPE beginningAccess, D3D12_RENDER_PASS_ENDING_ACCESS_TYPE endingAccess)
+void DX12Device::BeginRenderPass(D3D12_RENDER_PASS_RENDER_TARGET_DESC *rtvDesc, UINT renderTargetDescritions, D3D12_RENDER_PASS_DEPTH_STENCIL_DESC* depthDesc, DX12GraphicsCommandRecorder* recorder)
 {
-    DX12SwapChain* dx12swc = (DX12SwapChain*)GetAndValidateItem(swcIndex, D12SWAPCHAINHANDLE);    
-
+     
     D3D12_VIEWPORT viewport{};
-    viewport.Width = (FLOAT)dx12swc->width;
-    viewport.Height = (FLOAT)dx12swc->height;
+    viewport.Width = (FLOAT)800;
+    viewport.Height = (FLOAT)600;
     viewport.MinDepth = 0.0f;
     viewport.MaxDepth = 1.0f;
 
     D3D12_RECT scissor{};
     scissor.left = 0;
     scissor.top = 0;
-    scissor.right = dx12swc->width;
-    scissor.bottom = dx12swc->height;
+    scissor.right = 800;
+    scissor.bottom = 600;
 
-    UINT rtvCount = 1;
-    D3D12_RENDER_PASS_RENDER_TARGET_DESC rtvDesc{};
+ 
 
-    rtvDesc.BeginningAccess.Type = beginningAccess;
-
-    if (beginningAccess == D3D12_RENDER_PASS_BEGINNING_ACCESS_TYPE_CLEAR)
-    {
-        rtvDesc.BeginningAccess.Clear.ClearValue.Format = dx12swc->rtvFormat;
-        memcpy(rtvDesc.BeginningAccess.Clear.ClearValue.Color, clearColor, sizeof(FLOAT) * 4);
-    }
-
-    rtvDesc.EndingAccess.Type = endingAccess;
-
-    if (endingAccess == D3D12_RENDER_PASS_ENDING_ACCESS_TYPE_RESOLVE)
-    {
-       
-    }
-   
-    DX12CPUDescriptorHandle rtvHandle = GetCPUHandleFromDescriptorManager(dx12swc->rtvDescriptorHeap, currentImage);
-    rtvDesc.cpuDescriptor = rtvHandle;
-    
-
-    recorder->BeginRenderPass(rtvCount, &rtvDesc, depthDesc, D3D12_RENDER_PASS_FLAG_NONE);
+    recorder->BeginRenderPass(renderTargetDescritions, rtvDesc, depthDesc, D3D12_RENDER_PASS_FLAG_NONE);
 
     recorder->SetScissor(1, &scissor);
     recorder->SetViewports(1, &viewport);

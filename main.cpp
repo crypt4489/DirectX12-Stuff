@@ -1,5 +1,7 @@
 #define WIN32_LEAN_AND_MEAN
 
+#include <bit>
+
 #include <Windows.h>
 #include "DX12Device.h"
 #include "Types.h"
@@ -24,10 +26,9 @@ bool g_IsInitialized = false;
 
 static char globalMemoryPool[STORAGE_MEM_SIZE];
 static char tempGlobalMemoryPool[TEMP_MEM_SIZE];
-static size_t tempGlobalAllocator = 0;
-static size_t tempGlobalAllocatorSize = TEMP_MEM_SIZE;
-static size_t storageGlobalAllocator = 0;
-static size_t storageGlobalAllocatorSize = STORAGE_MEM_SIZE;
+
+static RingAllocator tempGlobalMemoryAllocator(tempGlobalMemoryPool, TEMP_MEM_SIZE);
+static SlabAllocator globalMemoryAllocater(globalMemoryPool, STORAGE_MEM_SIZE);
 
 
 
@@ -401,32 +402,14 @@ D3D12_PRIMITIVE_TOPOLOGY_TYPE ConvertPrimitiveTypeToD3D12TopologyType(PrimitiveT
 
 
 
-void* AllocFromTemp(size_t size, size_t alignment)
+void* AllocFromTemp(int size, int alignment)
 {
-    size_t current = tempGlobalAllocator;
-
-    if (current + size >= TEMP_MEM_SIZE)
-        current = 0;
-
-    current = (current + alignment - 1) & ~(alignment - 1);
-
-    tempGlobalAllocator += (size)+(current - tempGlobalAllocator);
-
-    return (void*)&tempGlobalMemoryPool[current];
+    return tempGlobalMemoryAllocator.Allocate(size, alignment);
 }
 
-void* AllocFromPermanent(size_t size, size_t alignment)
+void* AllocFromPermanent(int size, int alignment)
 {
-    size_t current = storageGlobalAllocator;
-
-    if (current + size >= STORAGE_MEM_SIZE)
-        current = 0;
-
-    current = (current + alignment - 1) & ~(alignment - 1);
-
-    storageGlobalAllocator += (size)+(current - storageGlobalAllocator);
-
-    return (void*)&globalMemoryPool[current];
+    return globalMemoryAllocater.Allocate(size, alignment);
 }
 
 
@@ -439,7 +422,6 @@ EntryHandle queueHandle;
 
 EntryHandle swapChain;
 
-
 EntryHandle swapChainDepthImages[MAX_FRAMES_IN_FLIGHT];
 
 EntryHandle graphicCommandPools[MAX_FRAMES_IN_FLIGHT];
@@ -449,6 +431,8 @@ DX12GraphicsCommandRecorder transferCommandRecorder;
 
 int transferCommandsUploaded = 0;
 
+
+EntryHandle globalRTVDescriptorHeap;
 EntryHandle globalDSVDescriptorHeap;
 
 UINT currentFrame = 0;
@@ -483,6 +467,10 @@ struct TextureDetails
 EntryHandle bgraPool;
 
 EntryHandle rsvdsvPool;
+
+
+static AttachmentGraph mainGraphLayout;
+static AttachmentGraphInstance mainGraphInstance;
 
 void ParseBMP(TextureDetails* details, const char* name);
 
@@ -693,31 +681,341 @@ EntryHandle CreateGraphicsPipelineObject(int* descriptorsets, int descCount, DX1
 
 XMVECTOR color = { 1.0f, 0.0f, 0.0f, 1.0f };
 
+
+std::array<int, 10> renderPassesHandles{};
+
+int CreateAttachmentResources(AttachmentGraphInstance* graphInstance, int renderPassIndex, int imageCount, EntryHandle* backBufferResources, EntryHandle* backBufferViews, uint32_t width, uint32_t height, RenderPassType rpType, AttachmentClear* clears)
+{
+    static int rpIndex = 0;
+
+    AttachmentRenderPassInstance* currentRenderPass = &graphInstance->passes[renderPassIndex];
+
+    AttachmentRenderPass* currentRenderPassDescription = &graphInstance->graphLayout->holders[renderPassIndex];
+
+    int baseRPData = currentRenderPass->baseRenderPassData = rpIndex;
+
+    if (currentRenderPassDescription->depthStencilCount)
+    {
+        rpIndex += 1;
+    }
+
+    rpIndex += 1;
+
+    int colorCount = currentRenderPassDescription->colorCount;
+
+    int depthCount = currentRenderPassDescription->depthStencilCount;
+
+    int depthOffset = (colorCount * imageCount);
+
+    int depthIndex = 0;
+
+    int colorIndex = 0;
+
+    int attachmentCount = currentRenderPass->attachInstCount;
+
+    AttachmentInstance* attachInsts = currentRenderPass->attachInst;
+
+    currentRenderPass->rpType = rpType;
+
+    EntryHandle* attachmentViews = (EntryHandle*)AllocFromTemp(sizeof(EntryHandle) * attachmentCount * imageCount, alignof(EntryHandle));
+
+    EntryHandle* attachmentResources = (EntryHandle*)AllocFromTemp(sizeof(EntryHandle) * attachmentCount * imageCount, alignof(EntryHandle));
+
+    for (int b = 0; b < attachmentCount; b++)
+    {
+        AttachmentInstance* attachDesc = &attachInsts[b];
+
+        int resourceIndex = attachDesc->attachmentResource;
+
+        AttachmentResourceInstance* resourceInst = &graphInstance->resources[resourceIndex];
+
+        AttachmentResource* resourceTempl = &graphInstance->graphLayout->resources[resourceIndex];
+
+        int sampHi = resourceInst->sampHi;
+        int sampLo = resourceInst->sampLo;
+
+        int sampleCount = max(std::bit_width((unsigned)sampHi) - 1, 1);
+
+        int imageWidth = width;
+        int imageHeight = height;
+
+        if (clears)
+        {
+            attachDesc->clear = clears[resourceIndex];
+        }
+
+        if (resourceTempl->viewType == AttachmentViewType::SWAPCHAIN)
+        {
+            resourceInst->attachmentImage = (EntryHandle**)AllocFromPermanent(sizeof(EntryHandle*) * 1, alignof(EntryHandle));
+            resourceInst->attachmentImageView = (EntryHandle**)AllocFromPermanent(sizeof(EntryHandle*) * 1, alignof(EntryHandle));
+            resourceInst->attachmentImageView[0] = backBufferViews;
+            resourceInst->attachmentImage[0] = backBufferResources;
+
+            for (int g = 0; g < imageCount; g++)
+            {
+                attachmentResources[(g * colorCount) + colorIndex] = backBufferResources[g];
+                attachmentViews[(g * colorCount) + colorIndex] = backBufferViews[g];
+            }
+
+            colorIndex++;
+        }
+        else
+        {
+            if (!resourceInst->attachmentImage)
+            {
+                resourceInst->attachmentImage = (EntryHandle**)AllocFromPermanent(sizeof(EntryHandle*) * sampleCount, alignof(EntryHandle));
+
+                for (int c = 0; c < sampleCount; c++)
+                {
+                    resourceInst->attachmentImage[c] = (EntryHandle*)AllocFromPermanent(sizeof(EntryHandle) * imageCount, alignof(EntryHandle));
+                }
+            }
+
+            if (!resourceInst->attachmentImageView)
+            {
+
+                resourceInst->attachmentImageView = (EntryHandle**)AllocFromPermanent(sizeof(EntryHandle*) * sampleCount, alignof(EntryHandle));
+
+                for (int c = 0; c < sampleCount; c++)
+                {
+                    resourceInst->attachmentImageView[c] = (EntryHandle*)AllocFromPermanent(sizeof(EntryHandle) * imageCount, alignof(EntryHandle));
+                }
+            }
+
+            DXGI_FORMAT attachmentFormat = ConvertImageFormatToDXGIFormat(resourceTempl->format);
+
+            resourceInst->imageCount = imageCount;
+
+            switch (resourceInst->usage)
+            {
+
+            case AttachmentResourceInstanceUsage::COLOR_ATTACHMENT_USAGE:
+
+                for (int v = 0; v < sampleCount; v++)
+                {
+                    for (int g = 0; g < imageCount; g++)
+                    {
+                       attachmentResources[(g*colorCount)+colorIndex] = resourceInst->attachmentImage[v][g] = deviceInstance.CreateImageResourceFromPool(rsvdsvPool, imageWidth, imageHeight,
+                            1, 1, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, attachmentFormat, D3D12_RESOURCE_DIMENSION_TEXTURE2D, D3D12_RESOURCE_STATE_RENDER_TARGET);
+                
+
+                       attachmentViews[(g * colorCount) + colorIndex] = resourceInst->attachmentImageView[v][g]
+                            =
+                            deviceInstance.CreateImageView(attachmentFormat, 0, 1);
+                    }
+
+                    sampLo <<= 1;
+                }
+
+                colorIndex++;
+
+                break;
+            case AttachmentResourceInstanceUsage::DEPTH_STENCIL_ATTACHMENT_USAGE:
+                
+                for (int v = 0; v < sampleCount; v++)
+                {
+                    for (int g = 0; g < imageCount; g++)
+                    {
+                        attachmentResources[depthOffset + (g * depthCount) + depthIndex] = resourceInst->attachmentImage[v][g] = deviceInstance.CreateImageResourceFromPool(rsvdsvPool, imageWidth, imageHeight,
+                            1, 1, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL, attachmentFormat, D3D12_RESOURCE_DIMENSION_TEXTURE2D, D3D12_RESOURCE_STATE_DEPTH_WRITE);
+
+                        attachmentViews[depthOffset + (g * depthCount) + depthIndex] = resourceInst->attachmentImageView[v][g]
+                            =
+                            deviceInstance.CreateImageView(attachmentFormat, 0, 1);
+                    }
+
+                    sampLo <<= 1;
+                }
+                depthIndex++;
+                break;
+            case AttachmentResourceInstanceUsage::DEPTH_ATTACHMENT_USAGE:
+                for (int v = 0; v < sampleCount; v++)
+                {
+                    for (int g = 0; g < imageCount; g++)
+                    {
+                        attachmentResources[depthOffset + (g * depthCount) + depthIndex] = resourceInst->attachmentImage[v][g] = deviceInstance.CreateImageResourceFromPool(rsvdsvPool, imageWidth, imageHeight,
+                            1, 1, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL, attachmentFormat, D3D12_RESOURCE_DIMENSION_TEXTURE2D, D3D12_RESOURCE_STATE_DEPTH_WRITE);
+
+                        attachmentViews[depthOffset + (g * depthCount) + depthIndex] = resourceInst->attachmentImageView[v][g]
+                            =
+                            deviceInstance.CreateImageView(attachmentFormat, 0, 1);
+                    }
+                    sampLo <<= 1;
+
+                }
+                depthIndex++;
+                break;
+
+            case AttachmentResourceInstanceUsage::STENCIL_ATTACHMENT_USAGE:
+                for (int v = 0; v < sampleCount; v++)
+                {
+                    for (int g = 0; g < imageCount; g++)
+                    {
+                        attachmentResources[depthOffset + (g * depthCount) + depthIndex] = resourceInst->attachmentImage[v][g] = deviceInstance.CreateImageResourceFromPool(rsvdsvPool, imageWidth, imageHeight,
+                            1, 1, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL, attachmentFormat, D3D12_RESOURCE_DIMENSION_TEXTURE2D, D3D12_RESOURCE_STATE_DEPTH_WRITE);
+
+                        attachmentViews[depthOffset + (g * depthCount) + depthIndex] = resourceInst->attachmentImageView[v][g]
+                            =
+                            deviceInstance.CreateImageView(attachmentFormat, 0, 1);
+                    }
+                    sampLo <<= 1;
+
+                }
+                depthIndex++;
+                break;
+
+            case AttachmentResourceInstanceUsage::RESOLVE_ATTACHMENT_USAGE:
+                for (int g = 0; g < imageCount; g++)
+                {
+                    attachmentResources[(g * colorCount) + colorIndex] = resourceInst->attachmentImage[0][g] = deviceInstance.CreateImageResourceFromPool(rsvdsvPool, imageWidth, imageHeight,
+                        1, 1, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL, attachmentFormat, D3D12_RESOURCE_DIMENSION_TEXTURE2D, D3D12_RESOURCE_STATE_RENDER_TARGET|D3D12_RESOURCE_STATE_RESOLVE_SOURCE);
+
+                    attachmentViews[(g * colorCount) + colorIndex] = resourceInst->attachmentImageView[0][g]
+                        =
+                        deviceInstance.CreateImageView(attachmentFormat, 0, 1);
+                }
+                colorIndex++;
+                break;
+
+            case AttachmentResourceInstanceUsage::PRESERVE_ATTACHMENT_USAGE:
+                //flags = 0; // no direct Vulkan usage flag
+                break;
+
+            case AttachmentResourceInstanceUsage::INPUT_ATTACHMENT_USAGE:
+                //flags = VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
+                break;
+            }
+        }
+    }
+
+
+   
+    renderPassesHandles[baseRPData] = deviceInstance.CreateRenderTargetViews(globalRTVDescriptorHeap, &attachmentResources[0], colorCount, imageCount);
+    
+    renderPassesHandles[baseRPData+1] = deviceInstance.CreateDepthStencilView(globalDSVDescriptorHeap, &attachmentResources[(depthOffset)], &attachmentViews[(depthOffset)], imageCount);
+   
+    return 0;
+}
+
+void CreateFrameGraphInstance(AttachmentGraph* graphLayout, AttachmentGraphInstance* outInstance)
+{
+    int renderPassCount = graphLayout->passesCount;
+    int resourceCount = graphLayout->resourceCount;
+
+    outInstance->passes = (AttachmentRenderPassInstance*)AllocFromPermanent(sizeof(AttachmentRenderPassInstance) * renderPassCount, 8);
+    outInstance->resources = (AttachmentResourceInstance*)AllocFromPermanent(sizeof(AttachmentResourceInstance) * resourceCount, 8);
+    outInstance->graphLayout = graphLayout;
+
+    for (int i = 0; i < renderPassCount; i++)
+    {
+        AttachmentRenderPass* renderPassDescription = &graphLayout->holders[i];
+
+        AttachmentRenderPassInstance* passInstance = &outInstance->passes[i];
+
+        passInstance->maxSampleCount = 1;
+
+        int attachmentCount = passInstance->attachInstCount = renderPassDescription->attachmentCount;
+
+        passInstance->attachInst = (AttachmentInstance*)AllocFromPermanent(sizeof(AttachmentInstance) * attachmentCount, 8);
+
+        passInstance->currentSampleCount = 0;
+
+        int sampHi = 1, sampLo = 1;
+
+        for (int c = 0; c < attachmentCount; c++)
+        {
+            AttachmentDescription* desc = &renderPassDescription->descs[c];
+
+            AttachmentResource* resDesc = &graphLayout->resources[desc->resourceIndex];
+
+            AttachmentResourceInstance* currResource = &outInstance->resources[desc->resourceIndex];
+
+            int sampleCountLo = (resDesc->msaa ? 2 : 1);
+
+            int sampleCountHi = (resDesc->msaa ? (1 << 1) : 1);
+
+            sampHi = max(sampleCountHi, sampHi);
+
+            sampLo = max(sampleCountLo, sampLo);
+
+            currResource->attachmentImage = currResource->attachmentImageView = nullptr;
+
+            passInstance->attachInst[c].attachmentResource = desc->resourceIndex;
+            passInstance->attachInst[c].descLayout = desc;
+          
+            switch (desc->attachType)
+            {
+            case AttachmentDescriptionType::COLORATTACH:
+                currResource->usage = AttachmentResourceInstanceUsage::COLOR_ATTACHMENT_USAGE;
+                break;
+            case AttachmentDescriptionType::RESOLVEATTACH:
+                currResource->usage = AttachmentResourceInstanceUsage::RESOLVE_ATTACHMENT_USAGE;
+                break;
+            case AttachmentDescriptionType::DEPTHATTACH:
+                currResource->usage = AttachmentResourceInstanceUsage::DEPTH_ATTACHMENT_USAGE;
+                break;
+            case AttachmentDescriptionType::DEPTHSTENCILATTACH:
+                currResource->usage = AttachmentResourceInstanceUsage::DEPTH_STENCIL_ATTACHMENT_USAGE;
+                break;
+            case AttachmentDescriptionType::STENCILATTACH:
+                currResource->usage = AttachmentResourceInstanceUsage::STENCIL_ATTACHMENT_USAGE;
+                break;
+            }
+
+            currResource->sampLo = sampleCountLo;
+            currResource->sampHi = sampleCountHi;
+        }
+    }
+}
+
+
 void DoSceneStuff()
 {
+
+    DX12SwapChain* swapChainDX = (DX12SwapChain*)deviceInstance.GetAndValidateItem(swapChain, D12SWAPCHAINHANDLE);
+
+    StringView mainGraphInput = tempGlobalMemoryAllocator.AllocateFromNullStringCopy("MainFrameGraph.xml");
+
+    CreateAttachmentGraphFromFile(mainGraphInput, &mainGraphLayout, &tempGlobalMemoryAllocator);
+
+    CreateFrameGraphInstance(&mainGraphLayout, &mainGraphInstance);
+
+    std::array<AttachmentClear, 2> clears = {
+        RPClearType::CLEARCOLOR, {0.0, 0.0, 0.0, 0.0},
+        RPClearType::CLEARDEPTH, {1.0, 0},
+    };
+
+    CreateAttachmentResources(&mainGraphInstance, 0, swapChainDX->numberOfImages, swapChainDX->backBufferResources, swapChainDX->backbufferViews, 800, 600, RenderPassType::SWAPCHAIN_IMAGE_COUNT, clears.data());
+
     transferCommandRecorder.ResetCommandPoolandBuffer();
 
     bgraPool = deviceInstance.CreateTextureMemoryPool(256 * MiB, D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT);
 
-    ShaderDetails* sdetails[2];
+    SlabAllocator tempShaderDetails{ globalMemoryAllocater.Allocate(2 * KiB), 2 * KiB };
 
-    char* detailData = (char*)AllocFromTemp(1 * KiB, 4);
+    ShaderDetails* sdetails = (ShaderDetails*)tempShaderDetails.Head();
+  
+    int shaderCount = 0;
 
-    ShaderGraph* mainLayout = CreateShaderGraph("DirectLayout.xml", detailData, sdetails);
+    StringView graphNameView = tempGlobalMemoryAllocator.AllocateFromNullStringCopy("DirectLayout.xml");
+
+    ShaderGraph* mainLayout = CreateShaderGraph(graphNameView, &tempGlobalMemoryAllocator, &globalMemoryAllocater, &tempShaderDetails, &shaderCount);
 
     for (int i = 0; i < mainLayout->shaderMapCount; i++)
     {
         ShaderMap* map = (ShaderMap*)mainLayout->GetMap(i);
-        shaderHandles[i] = { ConvertShaderStageToD3D12ShaderStage(map->type), deviceInstance.CreateShaderBlob(sdetails[i]->GetString()) };
+        shaderHandles[i] = { ConvertShaderStageToD3D12ShaderStage(map->type), deviceInstance.CreateShaderBlob(sdetails->GetString()) };
+        sdetails = sdetails->GetNext();
     }
 
 
     EntryHandle genericRoot = CreateRootSignatureFromShaderGraph(mainLayout);//CreateGenericRootSignature();
 
-
     GenericPipelineStateInfo pipeInfo{};
 
-    CreatePipelineDescription("GenericPipeline.xml", &pipeInfo);
+    StringView pipelineNameView = tempGlobalMemoryAllocator.AllocateFromNullStringCopy("GenericPipeline.xml");
+
+    CreatePipelineDescription(pipelineNameView, &pipeInfo, &tempGlobalMemoryAllocator);
 
     pipeInfo.colorFormat = ImageFormat::R8G8B8A8;
     pipeInfo.depthFormat = ImageFormat::D32FLOAT;
@@ -812,8 +1110,6 @@ void DoSceneStuff()
 
     storedRenderables[0] = tri1;
     storedRenderables[1] = tri2;
-
-
 }
 
 
@@ -852,6 +1148,8 @@ int main()
     );
 
  
+    globalRTVDescriptorHeap = deviceInstance.CreateDescriptorHeapManager(MAX_FRAMES_IN_FLIGHT * 3, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, D3D12_DESCRIPTOR_HEAP_FLAG_NONE);
+
     globalDSVDescriptorHeap = deviceInstance.CreateDescriptorHeapManager(
         MAX_FRAMES_IN_FLIGHT,
         D3D12_DESCRIPTOR_HEAP_TYPE_DSV,
@@ -865,16 +1163,6 @@ int main()
     stagingSamplerDescriptorHeap = deviceInstance.CreateDescriptorHeapManager(MAX_FRAMES_IN_FLIGHT * 50, D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER, D3D12_DESCRIPTOR_HEAP_FLAG_NONE);
 
     rsvdsvPool = deviceInstance.CreateDSVRSVMemoryPool(24 * MiB, (1<<22), false);
-
-    deviceInstance.CreateDepthStencilView(
-        globalDSVDescriptorHeap,
-        rsvdsvPool,
-        swapChainDepthImages, 
-        MAX_FRAMES_IN_FLIGHT, 
-        800, 600, 
-        DXGI_FORMAT_D32_FLOAT, 
-        1
-    );
 
     for (UINT i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
     {
@@ -1070,8 +1358,6 @@ int Render()
 
     auto& commandRecorder = commandRecorders[currentFrame];
 
-    auto depthBuffer = swapChainDepthImages[currentImageIndex];
-
     ID3D12CommandList* commandLists[2];
 
     UINT cmdListIndex = 0;
@@ -1101,25 +1387,69 @@ int Render()
 
     commandRecorder.ResetCommandPoolandBuffer();
 
-    DX12CPUDescriptorHandle dsvHandle = deviceInstance.GetCPUHandleFromDescriptorManager(globalDSVDescriptorHeap, currentImageIndex);
+    int numberOfRenderPasses = mainGraphInstance.graphLayout->passesCount;
 
-    D3D12_RENDER_PASS_DEPTH_STENCIL_DESC depthDesc{};
+    for (int i = 0; i < numberOfRenderPasses; i++)
+    {
+        AttachmentRenderPass* currentRenderPassDesc = &mainGraphInstance.graphLayout->holders[i];
 
+        AttachmentRenderPassInstance* currentRenderPassInstance = &mainGraphInstance.passes[i];
 
+        int rtvCount = currentRenderPassDesc->colorCount;
 
-    depthDesc.cpuDescriptor = dsvHandle;
-    depthDesc.DepthBeginningAccess.Type = D3D12_RENDER_PASS_BEGINNING_ACCESS_TYPE_CLEAR;
-    depthDesc.DepthBeginningAccess.Clear.ClearValue.DepthStencil.Depth = 1.0f;
-    depthDesc.DepthBeginningAccess.Clear.ClearValue.DepthStencil.Stencil = 0;
-    depthDesc.DepthEndingAccess.Type = D3D12_RENDER_PASS_ENDING_ACCESS_TYPE_DISCARD;
-    depthDesc.StencilBeginningAccess.Type = D3D12_RENDER_PASS_BEGINNING_ACCESS_TYPE_NO_ACCESS;
-    depthDesc.StencilEndingAccess.Type = D3D12_RENDER_PASS_ENDING_ACCESS_TYPE_NO_ACCESS;
+        D3D12_RENDER_PASS_RENDER_TARGET_DESC* rtvDescs = (D3D12_RENDER_PASS_RENDER_TARGET_DESC*)AllocFromTemp(sizeof(D3D12_RENDER_PASS_RENDER_TARGET_DESC) * rtvCount, alignof(D3D12_RENDER_PASS_RENDER_TARGET_DESC));
 
-    FLOAT clearColor[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
+        D3D12_RENDER_PASS_DEPTH_STENCIL_DESC* depthDesc = nullptr;
 
-    deviceInstance.TransitionSWCImageToRenderTarget(swapChain, currentImageIndex, &commandRecorder);
+        int rtvIndex = 0;
 
-    deviceInstance.BeginRenderPassForSWC(swapChain, currentImageIndex, clearColor, &depthDesc, &commandRecorder, D3D12_RENDER_PASS_BEGINNING_ACCESS_TYPE_CLEAR, D3D12_RENDER_PASS_ENDING_ACCESS_TYPE_PRESERVE);
+        int attachCount = currentRenderPassInstance->attachInstCount;
+
+        int rpIndex = currentRenderPassInstance->baseRenderPassData;
+
+        if (currentRenderPassDesc->depthStencilCount > 0)
+        {
+            depthDesc = (D3D12_RENDER_PASS_DEPTH_STENCIL_DESC*)AllocFromTemp(sizeof(D3D12_RENDER_PASS_DEPTH_STENCIL_DESC), alignof(D3D12_RENDER_PASS_DEPTH_STENCIL_DESC));
+        }
+
+        for (int j = 0; j < attachCount; j++)
+        {
+            AttachmentInstance* attachInst = &currentRenderPassInstance->attachInst[j];
+
+            AttachmentDescription* desc = attachInst->descLayout;
+
+            if (desc->attachType == AttachmentDescriptionType::DEPTHATTACH)
+            {
+                DX12CPUDescriptorHandle dsvHandle = deviceInstance.GetCPUHandleFromDescriptorManager(globalDSVDescriptorHeap, renderPassesHandles[rpIndex+1] + currentImageIndex);
+
+                depthDesc->cpuDescriptor = dsvHandle;
+                depthDesc->DepthBeginningAccess.Type = D3D12_RENDER_PASS_BEGINNING_ACCESS_TYPE_CLEAR;
+                depthDesc->DepthBeginningAccess.Clear.ClearValue.DepthStencil.Depth = attachInst->clear.val.ddata;
+                depthDesc->DepthBeginningAccess.Clear.ClearValue.DepthStencil.Stencil = attachInst->clear.val.sdata;
+                depthDesc->DepthEndingAccess.Type = D3D12_RENDER_PASS_ENDING_ACCESS_TYPE_DISCARD;
+                depthDesc->StencilBeginningAccess.Type = D3D12_RENDER_PASS_BEGINNING_ACCESS_TYPE_NO_ACCESS;
+                depthDesc->StencilEndingAccess.Type = D3D12_RENDER_PASS_ENDING_ACCESS_TYPE_NO_ACCESS;
+            }
+            else
+            {
+                DX12CPUDescriptorHandle rtvHandle = deviceInstance.GetCPUHandleFromDescriptorManager(globalRTVDescriptorHeap, renderPassesHandles[rpIndex] + (currentImageIndex* rtvCount));
+                rtvDescs[rtvIndex].BeginningAccess.Type = D3D12_RENDER_PASS_BEGINNING_ACCESS_TYPE_CLEAR;
+                rtvDescs[rtvIndex].BeginningAccess.Clear.ClearValue.Color[0] = attachInst->clear.val.cdata[0];
+                rtvDescs[rtvIndex].BeginningAccess.Clear.ClearValue.Color[1] = attachInst->clear.val.cdata[1];
+                rtvDescs[rtvIndex].BeginningAccess.Clear.ClearValue.Color[2] = attachInst->clear.val.cdata[2];
+                rtvDescs[rtvIndex].BeginningAccess.Clear.ClearValue.Color[3] = attachInst->clear.val.cdata[3];
+                rtvDescs[rtvIndex].BeginningAccess.Clear.ClearValue.Format = ConvertImageFormatToDXGIFormat(mainGraphInstance.graphLayout->resources[desc->resourceIndex].format);
+                rtvDescs[rtvIndex].cpuDescriptor = rtvHandle;
+                rtvDescs[rtvIndex].EndingAccess.Type = D3D12_RENDER_PASS_ENDING_ACCESS_TYPE_PRESERVE;
+                rtvIndex++;
+            }
+  
+        }
+
+        deviceInstance.TransitionSWCImageToRenderTarget(swapChain, currentImageIndex, &commandRecorder);
+
+        deviceInstance.BeginRenderPass(rtvDescs, rtvCount, depthDesc, &commandRecorder);
+    }
 
     for (int i = 0; i < 2; i++)
     {
@@ -1480,7 +1810,7 @@ void ParseBMP(TextureDetails* details, const char* name)
 
     OSFileFlags openingFlags = READ;
 
-    int nRet = OSOpenFile(name, openingFlags, &outHandle);
+    int nRet = OSOpenFile(name, (int)strnlen(name, 250), openingFlags, &outHandle);
 
     if (nRet)
     {
@@ -1811,346 +2141,9 @@ int CreateTablesFromResourceSet(int* descriptorsets, int numDescriptorSet, int r
 
 
 
-ShaderGraph* CreateShaderGraph(
-    const std::string& filename,
-    char* detailsData,
-    ShaderDetails** details
-)
-{
 
-    uintptr_t TreeNodes[50]{};
-    int SetNodes[15]{};
-    int ShaderRefs[5]{};
 
-    OSFileHandle fileHandle;
 
-    auto ret = OSOpenFile(filename.c_str(), READ, &fileHandle);
-
-    if (ret)
-    {
-        throw std::runtime_error("Shader Init file is unable to be opened");
-    }
-
-    char* data = (char*)AllocFromTemp(fileHandle.fileLength, 64);
-
-    int shaderGraphSize = fileHandle.fileLength;
-
-    OSReadFile(&fileHandle, fileHandle.fileLength, data);
-
-    OSCloseFile(&fileHandle);
-
-    int shaderCount = 0;
-    int shaderResourceCount = 0;
-    int setCount = 0;
-
-    int lastShader = 0;
-    int shaderDetailDataStride = 0;
-
-    int tagCount = 0;
-    int curr = 0;
-
-    int stride = SkipLine(data, shaderGraphSize, curr);
-    curr += stride;
-
-    while (curr + stride < shaderGraphSize)
-    {
-
-        unsigned long hashl = 0;
-        bool opening = true;
-        stride = ProcessTag(data,  shaderGraphSize, curr, &hashl, &opening);
-        curr += stride;
-
-        stride = SkipLine(data, shaderGraphSize, curr);
-
-        if (opening)
-        {
-            tagCount++;
-        }
-
-        switch (hashl)
-        {
-        case hash("ShaderGraph"):
-            //std::cout << "ShaderGraph" << std::endl;
-            if (!opening)
-                curr = shaderGraphSize;
-            break;
-
-        case hash("HLSLShader"):
-            //std::cout << "GLSLShader" << std::endl;
-            if (opening) {
-                
-
-                stride = HandleShader(data, shaderGraphSize, curr, &TreeNodes[tagCount], detailsData, &shaderDetailDataStride);
-
-                ShaderRefs[shaderCount] = tagCount;
-
-                details[shaderCount] = (ShaderDetails*)detailsData;
-
-                detailsData += shaderDetailDataStride;
-
-                shaderCount++;
-            }
-            break;
-
-        case hash("ShaderResourceSet"):
-            //std::cout << "ShaderResourceSet" << std::endl;
-            if (opening) {
-                SetNodes[setCount] = tagCount;
-                setCount++;
-            }
-            break;
-        case hash("ShaderResourceItem"):
-            //std::cout << "ShaderResourceItem" << std::endl;
-            if (opening) {
-                stride = HandleShaderResourceItem(data,  shaderGraphSize, curr, &TreeNodes[tagCount]);
-                shaderResourceCount++;
-            }
-            break;
-        case hash("ComputeLayout"):
-            //std::cout << "ComputeLayout" << std::endl;
-            if (opening) {
-                stride = HandleComputeLayout(data,  shaderGraphSize, curr, &TreeNodes[tagCount]);
-            }
-
-            break;
-        }
-
-        curr += stride;
-
-
-    }
-
-
-
-    ShaderGraph* graph = (ShaderGraph*)(AllocFromTemp(sizeof(ShaderGraph) + (setCount * sizeof(ShaderResourceSetTemplate)) + (shaderResourceCount * sizeof(ShaderResource)) + (shaderCount * sizeof(ShaderMap)), 4));
-
-    memset(graph, 0, sizeof(ShaderGraph) + (setCount * sizeof(ShaderResourceSetTemplate)) + (shaderResourceCount * sizeof(ShaderResource)));
-
-    graph->shaderMapCount = shaderCount;
-    graph->resourceSetCount = setCount;
-
-    int shaderIndex = 0;
-
-    for (int j = 0; j < shaderCount; j++)
-    {
-        ShaderMap* map = (ShaderMap*)graph->GetMap(j);
-
-        ShaderDetailsXMLTag* tag = (ShaderDetailsXMLTag*)TreeNodes[ShaderRefs[j]];
-
-        ShaderStageType type = tag->type;
-
-        /*if (type == ShaderStageTypeBits::COMPUTESHADERSTAGE)
-        {
-            ShaderComputeLayoutXMLTag* ctag = (ShaderComputeLayoutXMLTag*)TreeNodes[ShaderRefs[j] + 1];
-            ShaderDetails* deats = details[j];
-            ShaderComputeLayout* layout = (ShaderComputeLayout*)deats->GetShaderData();
-            layout->x = ctag->comps.x;
-            layout->y = ctag->comps.y;
-            layout->z = ctag->comps.z;
-        } */
-
-        map->type = type;
-
-
-    }
-
-    int resourceIter = 0;
-
-    for (int i = 0; i < setCount; i++)
-    {
-
-        ShaderResourceSetTemplate* setLay = (ShaderResourceSetTemplate*)graph->GetSet(i);
-        int resIter = SetNodes[i] + 1;
-        ShaderResourceItemXMLTag* tag = (ShaderResourceItemXMLTag*)TreeNodes[resIter];
-        int bindingCount = 0;
-
-        setLay->resourceStart = resourceIter;
-
-        setLay->samplerCount = 0;
-        setLay->viewCount = 0;
-        setLay->constantsCount = 0;
-
-
-        while (tag && tag->hashCode == hash("ShaderResourceItem"))
-        {
-
-            ShaderResource* resource = (ShaderResource*)graph->GetResource(resourceIter++);
-            if (tag->resourceType == ShaderResourceType::CONSTANT_BUFFER)
-            {
-                resource->binding = ~0;
-                setLay->constantsCount++;
-            }
-            else
-            {
-                resource->binding = bindingCount;
-
-                if (tag->resourceType == ShaderResourceType::SAMPLERSTATE)
-                {
-                    setLay->samplerCount += tag->arrayCount;
-                }
-                else
-                {
-                    setLay->viewCount += tag->arrayCount;
-                }
-            }
-
-            
-
-            resource->stages = tag->shaderstage;
-
-            resource->action = tag->resourceAction;
-            resource->type = tag->resourceType;
-            resource->arrayCount = tag->arrayCount;
-            resource->set = i;
-            resource->size = tag->size;
-            resource->offset = tag->offset;
-            setLay->bindingCount++;
-
-
-            if (!(tag->resourceType == ShaderResourceType::CONSTANT_BUFFER))
-            {
-                bindingCount++;
-            }
-
-            tag = (ShaderResourceItemXMLTag*)TreeNodes[++resIter];
-        }
-    }
-
-    graph->resourceCount = resourceIter;
-
-    readerMemBufferAllocate = 0;
-
-    return graph;
-}
-
-
-void CreatePipelineDescription(const std::string& filename, GenericPipelineStateInfo* stateInfo)
-{
-    memset(stateInfo, 0, sizeof(GenericPipelineStateInfo));
-
-
-    OSFileHandle fileHandle;
-
-    auto ret = OSOpenFile(filename.c_str(), READ, &fileHandle);
-
-    if (ret)
-    {
-        throw std::runtime_error("Shader Init file is unable to be opened");
-    }
-
-    char* data = (char*)AllocFromTemp(fileHandle.fileLength, 64);
-
-    OSReadFile(&fileHandle, fileHandle.fileLength, data);
-
-    char* dataStart = data;
-    int dataSize = fileHandle.fileLength;
-
-    int tagCount = 0;
-    int curr = 0;
-
-    int stride = SkipLine(dataStart, dataSize, curr);
-    curr += stride;
-
-    int currentVertexInput = 0;
-    int currentVertexInputDescription = 0;
-
-    OSCloseFile(&fileHandle);
-
-    while (curr + stride < dataSize)
-    {
-
-        unsigned long hashl = 0;
-        bool opening = true;
-        stride = ProcessTag(dataStart, dataSize, curr, &hashl, &opening);
-        curr += stride;
-
-        stride = SkipLine(dataStart, dataSize, curr);
-
-        if (opening)
-        {
-            tagCount++;
-        }
-
-
-
-        switch (hashl)
-        {
-        case hash("PipelineDescription"):
-            if (opening)
-            {
-                stride = HandlePipelineDescription(dataStart, dataSize, curr, stateInfo);
-            }
-            break;
-        case hash("DepthTest"):
-            if (opening)
-            {
-                stride = HandleDepthTest(dataStart, dataSize, curr, stateInfo);
-            }
-            break;
-        case hash("PrimitiveType"):
-            if (opening)
-            {
-                stride = HandlePrimitiveType(dataStart, dataSize, curr, stateInfo);
-            }
-            break;
-
-        case hash("CullMode"):
-            if (opening)
-            {
-                stride = HandleCullMode(dataStart, dataSize, curr, stateInfo);
-            }
-            break;
-        case hash("VertexInput"):
-        {
-            if (opening)
-            {
-                stateInfo->vertexBufferDescCount++;
-                stride = HandleVertexInput(dataStart, dataSize, curr, stateInfo, currentVertexInput);
-            }
-            else
-            {
-                currentVertexInput++;
-            }
-            break;
-        }
-        case hash("VertexComponent"):
-        {
-            if (opening)
-            {
-                stateInfo->vertexBufferDesc[currentVertexInput].descCount++;
-                stride = HandleVertexComponentInput(dataStart, dataSize, curr, stateInfo, currentVertexInput, currentVertexInputDescription);
-            }
-            else
-            {
-                currentVertexInputDescription++;
-            }
-            break;
-        }
-        case hash("FrontStencilTest"):
-        {
-            if (opening)
-            {
-                stateInfo->StencilEnable = true;
-                stride = HandleStencilTest(dataStart, dataSize, curr, &stateInfo->frontFace);
-            }
-            break;
-        }
-        case hash("BackStencilTest"):
-        {
-            if (opening)
-            {
-                stateInfo->StencilEnable = true;
-                stride = HandleStencilTest(dataStart, dataSize, curr, &stateInfo->backFace);
-            }
-            break;
-        }
-        }
-
-        curr += stride;
-
-
-    }
-}
 
 
 

@@ -21,6 +21,9 @@
     <ClCompile Include="DX12Device.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="ancillarydefined.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Types.h">
@@ -39,5 +42,6 @@
   <ItemGroup>
     <Xml Include="DirectLayout.xml" />
     <Xml Include="GenericPipeline.xml" />
+    <Xml Include="MainFrameGraph.xml" />
   </ItemGroup>
 </Project>

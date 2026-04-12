@@ -135,8 +135,8 @@ struct DX12SamplerHandle
 struct DX12SwapChain
 {
     EntryHandle dxgiSwapChainHandle;
-    EntryHandle rtvDescriptorHeap;
     EntryHandle* backBufferResources;
+    EntryHandle* backbufferViews;
     UINT numberOfImages;
     DXGI_FORMAT rtvFormat;
     UINT width;
@@ -496,13 +496,13 @@ struct DX12Device
 
     ID3D12Device2* deviceHandle;
 
-    char deviceData[4096*8];
+    char deviceData[4096*16];
 
-    char deviceCache[4096*4];
+    char deviceCache[4096*14];
 
-    uintptr_t memHandleSlots[80];
+    uintptr_t memHandleSlots[150];
 
-    DX12PoolItem deviceHandlePool[80];
+    DX12PoolItem deviceHandlePool[150];
 
     EntryHandle handlesPointer = 0;
 
@@ -560,7 +560,7 @@ struct DX12Device
 
     EntryHandle CreateDescriptorHeapManager(UINT maxDescriptorHandles, D3D12_DESCRIPTOR_HEAP_TYPE type, D3D12_DESCRIPTOR_HEAP_FLAGS flags);
 
-    int CreateDepthStencilView(EntryHandle descriptorHeapIdx, EntryHandle poolIdx, EntryHandle* outBuffers, UINT imageCount, UINT width, UINT height, DXGI_FORMAT format, UINT sampleCount);
+    int CreateDepthStencilView(EntryHandle descriptorHeapIdx, EntryHandle* inResources, EntryHandle* inViews, UINT imageCount);
 
     void CreateDevice(bool debug);
 
@@ -577,13 +577,13 @@ struct DX12Device
 
     EntryHandle CreateSampledImageHandle(EntryHandle poolIdx, UINT width, UINT height, UINT depth, UINT mips, DXGI_FORMAT format, D3D12_RESOURCE_DIMENSION dimension);
 
-    EntryHandle CreateImageResourceFromPool(EntryHandle poolIdx, UINT width, UINT height, UINT depth, UINT mips, D3D12_RESOURCE_FLAGS flags, DXGI_FORMAT format, D3D12_RESOURCE_DIMENSION dimension);
+    EntryHandle CreateImageResourceFromPool(EntryHandle poolIdx, UINT width, UINT height, UINT depth, UINT mips, D3D12_RESOURCE_FLAGS flags, DXGI_FORMAT format, D3D12_RESOURCE_DIMENSION dimension, D3D12_RESOURCE_STATES resourceState);
 
     EntryHandle CreateGraphicsPipelineObject(DX12PipelineCreationInfo* info, DX12ConstantBufferPipelineArguments* constantArgs);
 
-    ID3D12Resource* CreatePlacedImageResource(DX12ImageMemoryPool* pool, UINT width, UINT height, UINT depth, UINT mips, D3D12_RESOURCE_FLAGS flags, DXGI_FORMAT format, D3D12_RESOURCE_DIMENSION dimension);
+    ID3D12Resource* CreatePlacedImageResource(DX12ImageMemoryPool* pool, UINT width, UINT height, UINT depth, UINT mips, D3D12_RESOURCE_FLAGS flags, DXGI_FORMAT format, D3D12_RESOURCE_DIMENSION dimension, D3D12_RESOURCE_STATES resourceState);
 
-    int CreateRenderTargetView(EntryHandle swapChainIdx, EntryHandle descriptorHeapIdx, EntryHandle* outBuffers, UINT imageCount);
+    int CreateRenderTargetViews(EntryHandle descriptorHeapIdx, EntryHandle* imageResourceHandles, uint32_t numberOfRenderTargets, uint32_t numberOfFrameBuffers);
 
     EntryHandle CreateRootSignature(DX12RootSignatureCreate* createInfo, D3D12_ROOT_SIGNATURE_FLAGS flags);
 
@@ -614,7 +614,7 @@ struct DX12Device
 
     void TransitionSWCImageToRenderTarget(EntryHandle swcIndex, UINT currentImage, DX12GraphicsCommandRecorder* recorder);
 
-    void BeginRenderPassForSWC(EntryHandle swcIndex, UINT currentImage, FLOAT clearColor[4], D3D12_RENDER_PASS_DEPTH_STENCIL_DESC* depthDesc, DX12GraphicsCommandRecorder* recorder, D3D12_RENDER_PASS_BEGINNING_ACCESS_TYPE beginningAccess, D3D12_RENDER_PASS_ENDING_ACCESS_TYPE endingAccess);
+    void BeginRenderPass(D3D12_RENDER_PASS_RENDER_TARGET_DESC* rtvDesc, UINT renderTargetDescritions, D3D12_RENDER_PASS_DEPTH_STENCIL_DESC* depthDesc, DX12GraphicsCommandRecorder* recorder);
 
     void BeginRenderPassForSWCMSAA(EntryHandle swcIndex, UINT currentImage, FLOAT clearColor[4], D3D12_RENDER_PASS_DEPTH_STENCIL_DESC* depthDesc, DX12GraphicsCommandRecorder* recorder, D3D12_RENDER_PASS_BEGINNING_ACCESS_TYPE beginningAccess);
     

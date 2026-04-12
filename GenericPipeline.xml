@@ -1,4 +1,3 @@
-<?xml version="1.0"?>
 <PipelineDescription sampLo="1" sampHi="16">
 	<VertexInput rate="vertex" size="32">
 		<VertexComponent usage="POS0" format="vec4" offset="0">
