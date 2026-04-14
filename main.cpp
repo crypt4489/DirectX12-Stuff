@@ -49,6 +49,170 @@ void ConvertVertexLayoutToD3D12InputDesc(
 );
 D3D12_PRIMITIVE_TOPOLOGY_TYPE ConvertPrimitiveTypeToD3D12TopologyType(PrimitiveType type);
 D3D12_PRIMITIVE_TOPOLOGY ConvertPrimitiveTypeToD3D12Topology(PrimitiveType type);
+D3D12_RENDER_PASS_ENDING_ACCESS_TYPE ConvertAttachmentStoreUsageToEndingAccess(AttachmentStoreUsage usage);
+D3D12_RENDER_PASS_BEGINNING_ACCESS_TYPE ConvertAttachmentLoadUsageToBeginningAccess(AttachmentLoadUsage usage);
+D3D12_BARRIER_LAYOUT ConvertToBarrierLayout(ImageLayout layout);
+
+D3D12_BARRIER_LAYOUT ConvertToBarrierLayout(ImageLayout layout)
+{
+    D3D12_BARRIER_LAYOUT returnBarrier = D3D12_BARRIER_LAYOUT_UNDEFINED;
+
+    switch (layout)
+    {
+    case ImageLayout::GENERAL_LAYOUT:
+        returnBarrier = D3D12_BARRIER_LAYOUT_COMMON;
+        break;
+    case ImageLayout::UNDEFINED:
+        returnBarrier = D3D12_BARRIER_LAYOUT_UNDEFINED;
+        break;
+
+    case ImageLayout::WRITEABLE:
+        returnBarrier = D3D12_BARRIER_LAYOUT_UNORDERED_ACCESS;
+        break;
+
+    case ImageLayout::SHADERREADABLE:
+        returnBarrier = D3D12_BARRIER_LAYOUT_SHADER_RESOURCE;
+        break;
+
+    case ImageLayout::COLORATTACHMENT:
+        returnBarrier = D3D12_BARRIER_LAYOUT_RENDER_TARGET;
+        break;
+
+    case ImageLayout::DEPTHSTENCILATTACHMENT:
+    case ImageLayout::STENCILATTACHMENT:
+    case ImageLayout::DEPTHATTACHMENT:
+        returnBarrier = D3D12_BARRIER_LAYOUT_DEPTH_STENCIL_WRITE;
+        break;
+
+    case ImageLayout::PRESENT:
+        returnBarrier = D3D12_BARRIER_LAYOUT_PRESENT;
+        break;
+
+    default:
+        returnBarrier = D3D12_BARRIER_LAYOUT_UNDEFINED;
+        break;
+    }
+
+    return returnBarrier;
+}
+
+void 
+CreateDepthDesc(
+    D3D12_RENDER_PASS_DEPTH_STENCIL_DESC* desc,
+    D3D12_CPU_DESCRIPTOR_HANDLE dsv,
+    const AttachmentClear& clear, 
+    ImageFormat depthStencilFormat)
+{
+
+    desc->cpuDescriptor = dsv;
+
+    switch (clear.type)
+    {
+    case CLEARDEPTH:
+    {
+        desc->DepthBeginningAccess.Type = D3D12_RENDER_PASS_BEGINNING_ACCESS_TYPE_CLEAR;
+
+        desc->DepthBeginningAccess.Clear.ClearValue.Format = ConvertImageFormatToDXGIFormat(depthStencilFormat);
+        desc->DepthBeginningAccess.Clear.ClearValue.DepthStencil.Depth = clear.val.ddata;
+    } break;
+
+    case NOCLEAR:
+    default:
+    {
+        desc->DepthBeginningAccess.Type =
+            D3D12_RENDER_PASS_BEGINNING_ACCESS_TYPE_DISCARD;
+    } break;
+    }
+}
+
+void
+CreateRenderTargetDesc(
+    D3D12_RENDER_PASS_RENDER_TARGET_DESC* desc,
+    D3D12_CPU_DESCRIPTOR_HANDLE rtv,
+    const AttachmentClear& clear,
+    ImageFormat rtvFormat)
+{
+    desc->cpuDescriptor = rtv;
+
+    switch (clear.type)
+    {
+    case CLEARCOLOR:
+    {
+        desc->BeginningAccess.Type = D3D12_RENDER_PASS_BEGINNING_ACCESS_TYPE_CLEAR;
+
+        desc->BeginningAccess.Clear.ClearValue.Format = ConvertImageFormatToDXGIFormat(rtvFormat); // You should set this!
+        memcpy(desc->BeginningAccess.Clear.ClearValue.Color,
+            clear.val.cdata,
+            sizeof(float) * 4);
+    } break;
+
+    case NOCLEAR:
+    default:
+    {
+        desc->BeginningAccess.Type = D3D12_RENDER_PASS_BEGINNING_ACCESS_TYPE_DISCARD;
+    } break;
+    }
+
+    return;
+}
+
+void CreateStencilDesc(
+    D3D12_RENDER_PASS_DEPTH_STENCIL_DESC* desc,
+    const AttachmentClear& clear,
+    ImageFormat format, AttachmentStoreUsage storeOp)
+{
+    switch (clear.type)
+    {
+    case CLEARDEPTH:
+    {
+        desc->StencilBeginningAccess.Type = D3D12_RENDER_PASS_BEGINNING_ACCESS_TYPE_CLEAR;
+        desc->StencilBeginningAccess.Clear.ClearValue.Format = ConvertImageFormatToDXGIFormat(format);
+        desc->StencilBeginningAccess.Clear.ClearValue.DepthStencil.Stencil = clear.val.sdata;
+                                                                                                
+    } break;
+
+    case NOCLEAR:
+    default:
+    {
+        desc->StencilBeginningAccess.Type = D3D12_RENDER_PASS_BEGINNING_ACCESS_TYPE_DISCARD;
+    } break;
+    }
+    desc->StencilEndingAccess.Type = ConvertAttachmentStoreUsageToEndingAccess(storeOp);
+}
+
+D3D12_RENDER_PASS_BEGINNING_ACCESS_TYPE
+ConvertAttachmentLoadUsageToBeginningAccess(AttachmentLoadUsage usage)
+{
+    switch (usage)
+    {
+    case AttachmentLoadUsage::ATTACHNOCARE:
+        return D3D12_RENDER_PASS_BEGINNING_ACCESS_TYPE_DISCARD;
+
+    case AttachmentLoadUsage::ATTACHCLEAR:
+        return D3D12_RENDER_PASS_BEGINNING_ACCESS_TYPE_CLEAR;
+
+    default:
+        // Safe fallback
+        return D3D12_RENDER_PASS_BEGINNING_ACCESS_TYPE_DISCARD;
+    }
+}
+
+D3D12_RENDER_PASS_ENDING_ACCESS_TYPE
+ConvertAttachmentStoreUsageToEndingAccess(AttachmentStoreUsage usage)
+{
+    switch (usage)
+    {
+    case AttachmentStoreUsage::ATTACHDISCARD:
+        return D3D12_RENDER_PASS_ENDING_ACCESS_TYPE_DISCARD;
+
+    case AttachmentStoreUsage::ATTACHSTORE:
+        return D3D12_RENDER_PASS_ENDING_ACCESS_TYPE_PRESERVE;
+
+    default:
+        // Safe fallback
+        return D3D12_RENDER_PASS_ENDING_ACCESS_TYPE_DISCARD;
+    }
+}
 
 
 const char* ConvertVertexUsageToSemanticName(VertexUsage usage, UINT* sematicIndex)
@@ -817,7 +981,7 @@ int CreateAttachmentResources(AttachmentGraphInstance* graphInstance, int render
                     for (int g = 0; g < imageCount; g++)
                     {
                         attachmentResources[depthOffset + (g * depthCount) + depthIndex] = resourceInst->attachmentImage[v][g] = deviceInstance.CreateImageResourceFromPool(rsvdsvPool, imageWidth, imageHeight,
-                            1, 1, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL, attachmentFormat, D3D12_RESOURCE_DIMENSION_TEXTURE2D, D3D12_RESOURCE_STATE_DEPTH_WRITE);
+                            1, 1, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL, attachmentFormat, D3D12_RESOURCE_DIMENSION_TEXTURE2D, D3D12_RESOURCE_STATE_COMMON);
 
                         attachmentViews[depthOffset + (g * depthCount) + depthIndex] = resourceInst->attachmentImageView[v][g]
                             =
@@ -834,7 +998,7 @@ int CreateAttachmentResources(AttachmentGraphInstance* graphInstance, int render
                     for (int g = 0; g < imageCount; g++)
                     {
                         attachmentResources[depthOffset + (g * depthCount) + depthIndex] = resourceInst->attachmentImage[v][g] = deviceInstance.CreateImageResourceFromPool(rsvdsvPool, imageWidth, imageHeight,
-                            1, 1, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL, attachmentFormat, D3D12_RESOURCE_DIMENSION_TEXTURE2D, D3D12_RESOURCE_STATE_DEPTH_WRITE);
+                            1, 1, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL, attachmentFormat, D3D12_RESOURCE_DIMENSION_TEXTURE2D, D3D12_RESOURCE_STATE_COMMON);
 
                         attachmentViews[depthOffset + (g * depthCount) + depthIndex] = resourceInst->attachmentImageView[v][g]
                             =
@@ -852,7 +1016,7 @@ int CreateAttachmentResources(AttachmentGraphInstance* graphInstance, int render
                     for (int g = 0; g < imageCount; g++)
                     {
                         attachmentResources[depthOffset + (g * depthCount) + depthIndex] = resourceInst->attachmentImage[v][g] = deviceInstance.CreateImageResourceFromPool(rsvdsvPool, imageWidth, imageHeight,
-                            1, 1, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL, attachmentFormat, D3D12_RESOURCE_DIMENSION_TEXTURE2D, D3D12_RESOURCE_STATE_DEPTH_WRITE);
+                            1, 1, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL, attachmentFormat, D3D12_RESOURCE_DIMENSION_TEXTURE2D, D3D12_RESOURCE_STATE_COMMON);
 
                         attachmentViews[depthOffset + (g * depthCount) + depthIndex] = resourceInst->attachmentImageView[v][g]
                             =
@@ -1387,79 +1551,138 @@ int Render()
 
     commandRecorder.ResetCommandPoolandBuffer();
 
-    int numberOfRenderPasses = mainGraphInstance.graphLayout->passesCount;
-
-    for (int i = 0; i < numberOfRenderPasses; i++)
+    for (int frameGraph = 0; frameGraph < 1; frameGraph++)
     {
-        AttachmentRenderPass* currentRenderPassDesc = &mainGraphInstance.graphLayout->holders[i];
+        AttachmentGraphInstance* currGraphInstance = &mainGraphInstance;
 
-        AttachmentRenderPassInstance* currentRenderPassInstance = &mainGraphInstance.passes[i];
+        int numberOfRenderPasses = currGraphInstance->graphLayout->passesCount;
 
-        int rtvCount = currentRenderPassDesc->colorCount;
-
-        D3D12_RENDER_PASS_RENDER_TARGET_DESC* rtvDescs = (D3D12_RENDER_PASS_RENDER_TARGET_DESC*)AllocFromTemp(sizeof(D3D12_RENDER_PASS_RENDER_TARGET_DESC) * rtvCount, alignof(D3D12_RENDER_PASS_RENDER_TARGET_DESC));
-
-        D3D12_RENDER_PASS_DEPTH_STENCIL_DESC* depthDesc = nullptr;
-
-        int rtvIndex = 0;
-
-        int attachCount = currentRenderPassInstance->attachInstCount;
-
-        int rpIndex = currentRenderPassInstance->baseRenderPassData;
-
-        if (currentRenderPassDesc->depthStencilCount > 0)
+        for (int i = 0; i < numberOfRenderPasses; i++)
         {
-            depthDesc = (D3D12_RENDER_PASS_DEPTH_STENCIL_DESC*)AllocFromTemp(sizeof(D3D12_RENDER_PASS_DEPTH_STENCIL_DESC), alignof(D3D12_RENDER_PASS_DEPTH_STENCIL_DESC));
+            AttachmentRenderPass* currentRenderPassDesc = &currGraphInstance->graphLayout->holders[i];
+
+            AttachmentRenderPassInstance* currentRenderPassInstance = &currGraphInstance->passes[i];
+
+            int rtvCount = currentRenderPassDesc->colorCount;
+
+            int depthStencilCount = currentRenderPassDesc->depthStencilCount;
+
+            D3D12_RENDER_PASS_RENDER_TARGET_DESC* rtvDescs = (D3D12_RENDER_PASS_RENDER_TARGET_DESC*)AllocFromTemp(sizeof(D3D12_RENDER_PASS_RENDER_TARGET_DESC) * rtvCount, alignof(D3D12_RENDER_PASS_RENDER_TARGET_DESC));
+
+            D3D12_RENDER_PASS_DEPTH_STENCIL_DESC depthDesc;
+
+            int rtvIndex = 0;
+
+            int attachCount = currentRenderPassInstance->attachInstCount;
+
+            int rpIndex = currentRenderPassInstance->baseRenderPassData;
+
+            for (int j = 0; j < attachCount; j++)
+            {
+                AttachmentInstance* attachInst = &currentRenderPassInstance->attachInst[j];
+
+                AttachmentDescription* desc = attachInst->descLayout;
+
+                if (desc->attachType == AttachmentDescriptionType::DEPTHATTACH)
+                {
+                    DX12CPUDescriptorHandle dsvHandle = deviceInstance.GetCPUHandleFromDescriptorManager(globalDSVDescriptorHeap, renderPassesHandles[rpIndex + 1] + currentImageIndex);
+
+                    CreateDepthDesc(&depthDesc, dsvHandle, attachInst->clear, currGraphInstance->graphLayout->resources[desc->resourceIndex].format);
+
+                    depthDesc.DepthEndingAccess.Type = ConvertAttachmentStoreUsageToEndingAccess(desc->storeOp);;
+
+                    depthDesc.StencilBeginningAccess.Type = D3D12_RENDER_PASS_BEGINNING_ACCESS_TYPE_NO_ACCESS;
+                    depthDesc.StencilEndingAccess.Type = D3D12_RENDER_PASS_ENDING_ACCESS_TYPE_NO_ACCESS;
+
+                    commandRecorder.TransitionImageResource(currGraphInstance->resources[attachInst->attachmentResource].attachmentImage[0][currentImageIndex],
+                        D3D12_BARRIER_SYNC_NONE, D3D12_BARRIER_ACCESS_NO_ACCESS,
+                        D3D12_BARRIER_SYNC_DEPTH_STENCIL, D3D12_BARRIER_ACCESS_DEPTH_STENCIL_WRITE,
+                        ConvertToBarrierLayout(ImageLayout::GENERAL_LAYOUT), ConvertToBarrierLayout(ImageLayout::DEPTHSTENCILATTACHMENT),
+                        0, 1, 0, 1
+                    );
+
+                }
+                else if (desc->attachType == AttachmentDescriptionType::COLORATTACH)
+                {
+                    DX12CPUDescriptorHandle rtvHandle = deviceInstance.GetCPUHandleFromDescriptorManager(globalRTVDescriptorHeap, renderPassesHandles[rpIndex] + (currentImageIndex * rtvCount));
+                    CreateRenderTargetDesc(&rtvDescs[rtvIndex], rtvHandle, attachInst->clear, currGraphInstance->graphLayout->resources[desc->resourceIndex].format);
+                    rtvDescs[rtvIndex].EndingAccess.Type = ConvertAttachmentStoreUsageToEndingAccess(desc->storeOp);
+
+
+                    commandRecorder.TransitionImageResource(currGraphInstance->resources[attachInst->attachmentResource].attachmentImage[0][currentImageIndex],
+                        D3D12_BARRIER_SYNC_NONE, D3D12_BARRIER_ACCESS_NO_ACCESS,
+                        D3D12_BARRIER_SYNC_RENDER_TARGET, D3D12_BARRIER_ACCESS_RENDER_TARGET,
+                        ConvertToBarrierLayout(ImageLayout::PRESENT), ConvertToBarrierLayout(ImageLayout::COLORATTACHMENT),
+                        0, 1, 0, 1
+                    );
+
+                    rtvIndex++;
+
+                }
+            }
+
+
+            deviceInstance.BeginRenderPass(rtvDescs, rtvCount, &depthDesc, depthStencilCount, &commandRecorder);
+
+            D3D12_VIEWPORT viewport{};
+            viewport.Width = (FLOAT)800;
+            viewport.Height = (FLOAT)600;
+            viewport.MinDepth = 0.0f;
+            viewport.MaxDepth = 1.0f;
+
+            D3D12_RECT scissor{};
+            scissor.left = 0;
+            scissor.top = 0;
+            scissor.right = 800;
+            scissor.bottom = 600;
+
+            commandRecorder.SetScissor(1, &scissor);
+            commandRecorder.SetViewports(1, &viewport);
+
+            for (int i = 0; i < 2; i++)
+            {
+                DX12GraphicsPipelineObject* obj = (DX12GraphicsPipelineObject*)deviceInstance.GetAndValidateItem(storedRenderables[i], D12PIPELINEOBJECT);
+                obj->DrawObject(&commandRecorders[currentFrame], currentFrame);
+            }
+
+            commandRecorder.EndRenderPass();
+
         }
 
-        for (int j = 0; j < attachCount; j++)
+        for (int i = 0; i < numberOfRenderPasses; i++)
         {
-            AttachmentInstance* attachInst = &currentRenderPassInstance->attachInst[j];
+            AttachmentRenderPass* currentRenderPassDesc = &currGraphInstance->graphLayout->holders[i];
 
-            AttachmentDescription* desc = attachInst->descLayout;
+            AttachmentRenderPassInstance* currentRenderPassInstance = &currGraphInstance->passes[i];
 
-            if (desc->attachType == AttachmentDescriptionType::DEPTHATTACH)
+            int attachCount = currentRenderPassInstance->attachInstCount;
+
+            for (int j = 0; j < attachCount; j++)
             {
-                DX12CPUDescriptorHandle dsvHandle = deviceInstance.GetCPUHandleFromDescriptorManager(globalDSVDescriptorHeap, renderPassesHandles[rpIndex+1] + currentImageIndex);
+                AttachmentInstance* attachInst = &currentRenderPassInstance->attachInst[j];
 
-                depthDesc->cpuDescriptor = dsvHandle;
-                depthDesc->DepthBeginningAccess.Type = D3D12_RENDER_PASS_BEGINNING_ACCESS_TYPE_CLEAR;
-                depthDesc->DepthBeginningAccess.Clear.ClearValue.DepthStencil.Depth = attachInst->clear.val.ddata;
-                depthDesc->DepthBeginningAccess.Clear.ClearValue.DepthStencil.Stencil = attachInst->clear.val.sdata;
-                depthDesc->DepthEndingAccess.Type = D3D12_RENDER_PASS_ENDING_ACCESS_TYPE_DISCARD;
-                depthDesc->StencilBeginningAccess.Type = D3D12_RENDER_PASS_BEGINNING_ACCESS_TYPE_NO_ACCESS;
-                depthDesc->StencilEndingAccess.Type = D3D12_RENDER_PASS_ENDING_ACCESS_TYPE_NO_ACCESS;
+                AttachmentDescription* desc = attachInst->descLayout;
+
+                if (desc->attachType == AttachmentDescriptionType::DEPTHATTACH)
+                {
+                    commandRecorder.TransitionImageResource(currGraphInstance->resources[attachInst->attachmentResource].attachmentImage[0][currentImageIndex],
+                        D3D12_BARRIER_SYNC_DEPTH_STENCIL, D3D12_BARRIER_ACCESS_DEPTH_STENCIL_WRITE, D3D12_BARRIER_SYNC_NONE, D3D12_BARRIER_ACCESS_NO_ACCESS,
+                        ConvertToBarrierLayout(ImageLayout::DEPTHSTENCILATTACHMENT), ConvertToBarrierLayout(ImageLayout::GENERAL_LAYOUT),
+                        0, 1, 0, 1
+                    );
+                }
+                else if (desc->attachType == AttachmentDescriptionType::COLORATTACH)
+                {
+                    commandRecorder.TransitionImageResource(currGraphInstance->resources[attachInst->attachmentResource].attachmentImage[0][currentImageIndex],
+                        D3D12_BARRIER_SYNC_RENDER_TARGET, D3D12_BARRIER_ACCESS_RENDER_TARGET,
+                        D3D12_BARRIER_SYNC_NONE, D3D12_BARRIER_ACCESS_NO_ACCESS,
+                        ConvertToBarrierLayout(ImageLayout::COLORATTACHMENT), ConvertToBarrierLayout(desc->dstLayout),
+                        0, 1, 0, 1
+                    );
+                }
             }
-            else
-            {
-                DX12CPUDescriptorHandle rtvHandle = deviceInstance.GetCPUHandleFromDescriptorManager(globalRTVDescriptorHeap, renderPassesHandles[rpIndex] + (currentImageIndex* rtvCount));
-                rtvDescs[rtvIndex].BeginningAccess.Type = D3D12_RENDER_PASS_BEGINNING_ACCESS_TYPE_CLEAR;
-                rtvDescs[rtvIndex].BeginningAccess.Clear.ClearValue.Color[0] = attachInst->clear.val.cdata[0];
-                rtvDescs[rtvIndex].BeginningAccess.Clear.ClearValue.Color[1] = attachInst->clear.val.cdata[1];
-                rtvDescs[rtvIndex].BeginningAccess.Clear.ClearValue.Color[2] = attachInst->clear.val.cdata[2];
-                rtvDescs[rtvIndex].BeginningAccess.Clear.ClearValue.Color[3] = attachInst->clear.val.cdata[3];
-                rtvDescs[rtvIndex].BeginningAccess.Clear.ClearValue.Format = ConvertImageFormatToDXGIFormat(mainGraphInstance.graphLayout->resources[desc->resourceIndex].format);
-                rtvDescs[rtvIndex].cpuDescriptor = rtvHandle;
-                rtvDescs[rtvIndex].EndingAccess.Type = D3D12_RENDER_PASS_ENDING_ACCESS_TYPE_PRESERVE;
-                rtvIndex++;
-            }
-  
         }
-
-        deviceInstance.TransitionSWCImageToRenderTarget(swapChain, currentImageIndex, &commandRecorder);
-
-        deviceInstance.BeginRenderPass(rtvDescs, rtvCount, depthDesc, &commandRecorder);
     }
-
-    for (int i = 0; i < 2; i++)
-    {
-        DX12GraphicsPipelineObject* obj = (DX12GraphicsPipelineObject*)deviceInstance.GetAndValidateItem(storedRenderables[i], D12PIPELINEOBJECT);
-        obj->DrawObject(&commandRecorders[currentFrame], currentFrame);
-    }
-
-    commandRecorder.EndRenderPass();
-
-    deviceInstance.TransitionSWCToPresent(swapChain, currentImageIndex, &commandRecorder);
     
     if (commandRecorder.CloseCommandBuffer())
     {
@@ -1471,11 +1694,6 @@ int Render()
     commandLists[cmdListIndex++] = commandRecorder.cmdList;
 
     deviceInstance.ExecuteCommandListsOnQueue(queueHandle, commandLists, cmdListIndex);
-
-    //  UINT syncInterval = g_VSync ? 1 : 0;
-
-
-    // UINT presentFlags = g_TearingSupported && !g_VSync ? DXGI_PRESENT_ALLOW_TEARING : 0;
  
     deviceInstance.PresentSwapChainImage(swapChain, 0, 0);
 

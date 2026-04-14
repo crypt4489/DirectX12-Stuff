@@ -1011,9 +1011,7 @@ void DX12Device::WriteToImageDeviceLocalMemory(EntryHandle imageHandle, DX12Grap
 
     DX12ImageHandle* imageHandleT = (DX12ImageHandle*)GetAndValidateItem(imageHandle, D12IMAGEHANDLE);
 
-    ID3D12Resource* imageResourceHandle = (ID3D12Resource*)GetAndValidateItem(imageHandleT->resourceIndex, D12RESOURCEHANDLE);
-
-    commandRecorder->TransitionImageResource(imageResourceHandle,
+    commandRecorder->TransitionImageResource(imageHandleT->resourceIndex,
         D3D12_BARRIER_SYNC_NONE, D3D12_BARRIER_ACCESS_NO_ACCESS,
         D3D12_BARRIER_SYNC_COPY, D3D12_BARRIER_ACCESS_COPY_DEST,
         D3D12_BARRIER_LAYOUT_COMMON, D3D12_BARRIER_LAYOUT_COPY_DEST,
@@ -1035,7 +1033,7 @@ void DX12Device::WriteToImageDeviceLocalMemory(EntryHandle imageHandle, DX12Grap
 
     commandRecorder->CopyTextureRegion(&src, &dest, dmb->bufferHandle, imageHandleT->resourceIndex, NULL, 0, 0, 0);
 
-    commandRecorder->TransitionImageResource(imageResourceHandle,
+    commandRecorder->TransitionImageResource(imageHandleT->resourceIndex,
         D3D12_BARRIER_SYNC_COPY, D3D12_BARRIER_ACCESS_COPY_DEST,
         D3D12_BARRIER_SYNC_PIXEL_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE,
 
@@ -1370,35 +1368,27 @@ void DX12Device::TransitionSWCImageToRenderTarget(EntryHandle swcIndex, UINT cur
 
     ID3D12Resource* backBuffer = (ID3D12Resource*)GetAndValidateItem(dx12swc->backBufferResources[currentImage], D12RESOURCEHANDLE);
 
-    recorder->TransitionImageResource(backBuffer,
+   /* recorder->TransitionImageResource(backBuffer,
         D3D12_BARRIER_SYNC_NONE, D3D12_BARRIER_ACCESS_NO_ACCESS,
         D3D12_BARRIER_SYNC_RENDER_TARGET, D3D12_BARRIER_ACCESS_RENDER_TARGET,
         D3D12_BARRIER_LAYOUT_PRESENT, D3D12_BARRIER_LAYOUT_RENDER_TARGET,
         0, 1, 0, 1
-    );
+    );*/
 }
 
-void DX12Device::BeginRenderPass(D3D12_RENDER_PASS_RENDER_TARGET_DESC *rtvDesc, UINT renderTargetDescritions, D3D12_RENDER_PASS_DEPTH_STENCIL_DESC* depthDesc, DX12GraphicsCommandRecorder* recorder)
+void DX12Device::BeginRenderPass(D3D12_RENDER_PASS_RENDER_TARGET_DESC *rtvDesc, UINT renderTargetDescritions, D3D12_RENDER_PASS_DEPTH_STENCIL_DESC* depthDesc, UINT depthStencilCount, DX12GraphicsCommandRecorder* recorder)
 {
      
-    D3D12_VIEWPORT viewport{};
-    viewport.Width = (FLOAT)800;
-    viewport.Height = (FLOAT)600;
-    viewport.MinDepth = 0.0f;
-    viewport.MaxDepth = 1.0f;
+  
 
-    D3D12_RECT scissor{};
-    scissor.left = 0;
-    scissor.top = 0;
-    scissor.right = 800;
-    scissor.bottom = 600;
+    D3D12_RENDER_PASS_DEPTH_STENCIL_DESC* ldepthDesc = nullptr;
 
- 
+    if (depthStencilCount)
+        ldepthDesc = depthDesc;
 
-    recorder->BeginRenderPass(renderTargetDescritions, rtvDesc, depthDesc, D3D12_RENDER_PASS_FLAG_NONE);
+    recorder->BeginRenderPass(renderTargetDescritions, rtvDesc, ldepthDesc, D3D12_RENDER_PASS_FLAG_NONE);
 
-    recorder->SetScissor(1, &scissor);
-    recorder->SetViewports(1, &viewport);
+
 }
 
 void DX12Device::BeginRenderPassForSWCMSAA(EntryHandle swcIndex, UINT currentImage, FLOAT clearColor[4], D3D12_RENDER_PASS_DEPTH_STENCIL_DESC* depthDesc, DX12GraphicsCommandRecorder* recorder, D3D12_RENDER_PASS_BEGINNING_ACCESS_TYPE beginningAccess)
@@ -1455,6 +1445,7 @@ void DX12Device::TransitionSWCToPresent(EntryHandle swcIndex, UINT currentImageI
 
     ID3D12Resource* backBuffer = (ID3D12Resource*)GetAndValidateItem(dx12swc->backBufferResources[currentImageIndex], D12RESOURCEHANDLE);
 
+    /*
     recorder->TransitionImageResource(backBuffer,
 
         D3D12_BARRIER_SYNC_RENDER_TARGET, D3D12_BARRIER_ACCESS_RENDER_TARGET,
@@ -1462,6 +1453,7 @@ void DX12Device::TransitionSWCToPresent(EntryHandle swcIndex, UINT currentImageI
         D3D12_BARRIER_LAYOUT_RENDER_TARGET, D3D12_BARRIER_LAYOUT_PRESENT,
         0, 1, 0, 1
     );
+    */
 }
 
 int DX12Device::PresentSwapChainImage(EntryHandle swcIndex, UINT syncIntervalFlag, UINT presentFlags)
@@ -1718,13 +1710,16 @@ int DX12GraphicsCommandRecorder::CloseCommandBuffer()
     return 0;
 }
 
-void DX12GraphicsCommandRecorder::TransitionImageResource(ID3D12Resource* imageResource,
+void DX12GraphicsCommandRecorder::TransitionImageResource(EntryHandle imageResource,
     D3D12_BARRIER_SYNC srcSync, D3D12_BARRIER_ACCESS srcAccess,
     D3D12_BARRIER_SYNC dstSync, D3D12_BARRIER_ACCESS dstAccess, D3D12_BARRIER_LAYOUT srcLayout, D3D12_BARRIER_LAYOUT dstLayout, UINT baseArrayIndex, UINT numArrayLayers, UINT baseMipIndex, UINT numMipLevels)
 {
+
+    ID3D12Resource* imageResourceHandle = (ID3D12Resource*)device->GetAndValidateItem(imageResource, D12RESOURCEHANDLE);
+
     D3D12_TEXTURE_BARRIER barrierInfo{};
     barrierInfo.Flags = D3D12_TEXTURE_BARRIER_FLAG_NONE;
-    barrierInfo.pResource = imageResource;
+    barrierInfo.pResource = imageResourceHandle;
     barrierInfo.Subresources.FirstArraySlice = baseArrayIndex;
     barrierInfo.Subresources.IndexOrFirstMipLevel = baseMipIndex;
     barrierInfo.Subresources.FirstPlane = 0;

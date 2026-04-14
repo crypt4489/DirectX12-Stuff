@@ -169,7 +169,7 @@ struct DX12GraphicsCommandRecorder
     void ResetCommandPoolandBuffer();
     void SetViewports(UINT viewportCount, D3D12_VIEWPORT* viewports);
     void SetScissor(UINT scissorCount, D3D12_RECT* rects);
-    void TransitionImageResource(ID3D12Resource* imageResource,
+    void TransitionImageResource(EntryHandle imageResource,
         D3D12_BARRIER_SYNC srcSync, D3D12_BARRIER_ACCESS srcAccess,
         D3D12_BARRIER_SYNC dstSync, D3D12_BARRIER_ACCESS dstAccess, D3D12_BARRIER_LAYOUT srcLayout, D3D12_BARRIER_LAYOUT dstLayout, UINT baseArrayIndex, UINT numArrayLayers, UINT baseMipIndex, UINT numMipLevels);
 
@@ -614,7 +614,7 @@ struct DX12Device
 
     void TransitionSWCImageToRenderTarget(EntryHandle swcIndex, UINT currentImage, DX12GraphicsCommandRecorder* recorder);
 
-    void BeginRenderPass(D3D12_RENDER_PASS_RENDER_TARGET_DESC* rtvDesc, UINT renderTargetDescritions, D3D12_RENDER_PASS_DEPTH_STENCIL_DESC* depthDesc, DX12GraphicsCommandRecorder* recorder);
+    void BeginRenderPass(D3D12_RENDER_PASS_RENDER_TARGET_DESC* rtvDesc, UINT renderTargetDescritions, D3D12_RENDER_PASS_DEPTH_STENCIL_DESC* depthDesc, UINT depthStencilCount, DX12GraphicsCommandRecorder* recorder);
 
     void BeginRenderPassForSWCMSAA(EntryHandle swcIndex, UINT currentImage, FLOAT clearColor[4], D3D12_RENDER_PASS_DEPTH_STENCIL_DESC* depthDesc, DX12GraphicsCommandRecorder* recorder, D3D12_RENDER_PASS_BEGINNING_ACCESS_TYPE beginningAccess);
     
